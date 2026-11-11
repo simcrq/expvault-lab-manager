@@ -1,0 +1,2 @@
+# Preserve release bytes: startup verifies hashes on macOS and Windows.
+* -text

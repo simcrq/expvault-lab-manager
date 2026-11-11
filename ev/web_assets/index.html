@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>expvault · 实验工作台</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <script src="/theme.js"></script>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div id="login" class="login-screen">
+      <div class="login-card">
+        <div class="wordmark"><span class="logo-mark">e</span> expvault</div>
+        <p class="eyebrow">实验工作台</p>
+        <h1>让每一次发现<br />都有迹可循。</h1>
+        <p id="login-message" class="muted">正在连接本地实验库…</p>
+        <form id="login-form" hidden>
+          <label for="access-link">电脑端提供的完整访问链接</label
+          ><input
+            id="access-link"
+            type="password"
+            autocomplete="off"
+            placeholder="粘贴包含配对码的链接"
+            required
+          /><button class="button primary" type="submit">连接实验库</button>
+        </form>
+        <div class="network-note">
+          校园网若有设备隔离，请使用本机浏览器、独立热点或 USB 共享网络。
+        </div>
+      </div>
+    </div>
+    <div id="app" class="app-shell" hidden>
+      <aside id="sidebar" class="sidebar">
+        <a class="wordmark" href="/?view=overview" data-nav="overview"
+          ><span class="logo-mark">e</span> expvault<span class="wordmark-dot"
+            >.</span
+          ></a
+        >
+        <div class="workspace-label">实验记录与资料管理</div>
+        <button
+          type="button"
+          class="workspace-card workspace-switch"
+          data-action="workspaces"
+          aria-label="选择工作空间"
+        >
+          <span class="workspace-avatar" aria-hidden="true">E</span>
+          <div>
+            <strong id="workspace-name">我的实验库</strong
+            ><small>选择 / 新建工作空间</small>
+          </div>
+          <span data-icon="folder" aria-hidden="true"></span>
+        </button>
+        <div class="nav-label">工作空间</div>
+        <nav aria-label="主导航">
+          <a href="/?view=overview" data-nav="overview" class="nav-item"
+            ><span data-icon="overview"></span>工作概览</a
+          >
+          <a href="/?view=experiments" data-nav="experiments" class="nav-item"
+            ><span data-icon="flask"></span>实验项目<span
+              id="nav-count"
+              class="nav-count"
+            ></span
+          ></a>
+          <a href="/?view=files" data-nav="files" class="nav-item"
+            ><span data-icon="folder"></span>文件资料</a
+          >
+          <a href="/?view=backups" data-nav="backups" class="nav-item"
+            ><span data-icon="shield"></span>备份与校验</a
+          >
+          <a href="/?view=sync" data-nav="sync" class="nav-item"
+            ><span data-icon="refresh"></span>自动同步<span
+              id="sync-pending-count"
+              class="nav-count"
+              hidden
+            ></span
+          ></a>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="sidebar-tip">
+            <span data-icon="link"></span><strong>资料保存在你的电脑</strong>
+            <p>
+              校园网无需互通也能本机使用。手机访问请选择可直连的热点或 USB
+              共享网卡。
+            </p>
+          </div>
+          <div class="connection-line">
+            <span class="online-dot"></span
+            ><span id="connection-label">已连接实验库</span>
+          </div>
+          <div id="root-label" class="root-label"></div>
+        </div>
+      </aside>
+      <div class="main-shell">
+        <header class="topbar">
+          <div class="topbar-left">
+            <button
+              id="menu-button"
+              class="icon-button menu-button"
+              aria-label="展开导航"
+              aria-controls="sidebar"
+              aria-expanded="false"
+            >
+              <span data-icon="menu"></span></button
+            ><span class="breadcrumb"
+              >工作空间 <span>/</span>
+              <strong id="breadcrumb-current">工作概览</strong></span
+            >
+          </div>
+          <div class="topbar-actions">
+            <form id="global-search" class="global-search">
+              <span data-icon="search"></span
+              ><input
+                id="global-query"
+                aria-label="搜索实验、样品或标签"
+                placeholder="搜索实验、样品或标签…"
+                autocomplete="off"
+              /><kbd>↵</kbd>
+            </form>
+            <label class="theme-picker" for="theme-select">
+              <span data-icon="theme" aria-hidden="true"></span>
+              <span class="sr-only">颜色主题</span>
+              <select
+                id="theme-select"
+                data-theme-select
+                aria-label="颜色主题"
+                aria-describedby="theme-status"
+              >
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+                <option value="jade">青竹</option>
+                <option value="sand">暖砂</option>
+                <option value="lavender">雾紫</option>
+                <option value="ocean">深海</option>
+                <option value="system">跟随系统</option>
+              </select>
+            </label>
+            <span id="theme-status" class="sr-only" role="status"></span>
+            <button
+              id="tasks-toggle"
+              class="icon-button"
+              aria-label="查看后台任务"
+            >
+              <span data-icon="activity"></span
+              ><span id="task-count" class="task-count" hidden></span></button
+            ><span id="operator-avatar" class="operator-avatar">我</span>
+          </div>
+        </header>
+        <main id="content" tabindex="-1" aria-live="polite"></main>
+        <footer class="main-footer">
+          <span>expvault · 留住过程，连接发现</span
+          ><span>本地存储 / 原始文件保留 / SHA256 校验</span>
+        </footer>
+      </div>
+    </div>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+    <dialog id="editor" class="editor-dialog" aria-labelledby="dialog-title">
+      <form id="dialog-form">
+        <header class="dialog-header">
+          <div>
+            <p id="dialog-kicker" class="eyebrow">实验管理</p>
+            <h2 id="dialog-title" tabindex="-1"></h2>
+          </div>
+          <div class="dialog-header-actions">
+            <label class="theme-picker">
+              <span data-icon="theme" aria-hidden="true"></span>
+              <select data-theme-select aria-label="窗口颜色主题">
+                <option value="light">浅色</option>
+                <option value="dark">深色</option>
+                <option value="jade">青竹</option>
+                <option value="sand">暖砂</option>
+                <option value="lavender">雾紫</option>
+                <option value="ocean">深海</option>
+                <option value="system">跟随系统</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              class="icon-button"
+              data-action="close-dialog"
+              aria-label="关闭窗口"
+            >
+              <span data-icon="close"></span>
+            </button>
+          </div>
+        </header>
+        <div id="dialog-content" class="dialog-content"></div>
+        <p id="dialog-error" class="inline-error" role="alert" hidden></p>
+        <footer id="dialog-footer" class="dialog-footer">
+          <button type="button" class="button" data-action="close-dialog">
+            取消</button
+          ><button id="dialog-submit" type="submit" class="button primary">
+            保存
+          </button>
+        </footer>
+      </form>
+    </dialog>
+    <section id="task-panel" class="task-panel" hidden aria-label="后台任务">
+      <header>
+        <strong>后台任务</strong
+        ><button class="icon-button" id="tasks-close" aria-label="收起任务">
+          <span data-icon="close"></span>
+        </button>
+      </header>
+      <div id="task-list"></div>
+    </section>
+    <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  </body>
+</html>

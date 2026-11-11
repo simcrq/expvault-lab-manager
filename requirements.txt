@@ -1,0 +1,7 @@
+prompt_toolkit>=3.0.43,<4
+rich>=13.9.4,<15
+jsonschema>=4.18,<5
+filelock>=3.12,<4
+qrcode>=7.4,<9
+psutil>=5.9,<8
+cryptography>=43,<50
