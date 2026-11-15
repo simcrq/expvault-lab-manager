@@ -7,7 +7,7 @@
 ```sh
 python tools/build_release.py --ref HEAD --output dist
 # 或从已建立的版本标签重建
-python tools/build_release.py --ref v1.7.0 --output dist/rebuilt
+python tools/build_release.py --ref v1.7.1 --output dist/rebuilt
 ```
 
 输出为 `expvault-lab-manager-<版本>.zip` 和同名 `.zip.sha256`。已有产物不覆盖，请换一个输出目录。
@@ -32,3 +32,5 @@ python lab_manager.py --no-open --port 0
 不要将运行测试后产生数据的目录重新压缩交付，应交付构建脚本产生的原始 ZIP。
 
 本地没有 Git remote 时，创建本地版本标签并交付 ZIP；不会自动上传第三方发布平台。
+
+公开发布使用包含 `LICENSE`、`THIRD_PARTY_NOTICES.md` 与 `SECURITY.md` 的 1.7.1 或更新发布包。历史标签保持原样，不覆盖旧产物。构建工具兼容已核对的 v1.5.1、v1.7.0 标签，不要求旧版具有后来新增的许可文件或 NAS 指南；新版本会把已有许可和安全文档一并打包。

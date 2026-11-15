@@ -20,7 +20,7 @@ Windows 安装时勾选 **Add Python to PATH**，并保留 Python Launcher。无
 
 ### 2. 解压程序
 
-把收到的 `expvault-lab-manager-1.7.0.zip` **完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
+把收到的 `expvault-lab-manager-1.7.1.zip` **完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
 
 如果拿到的是源码目录，也可以使用，启动文件与独立包有所不同：
 
@@ -234,3 +234,7 @@ python lab_manager.py
 ```
 
 Mac 将 `python` 替换为实际安装的 `python3` 即可。`--check` 检查程序完整性与依赖，不创建实验库。
+
+## 开源许可
+
+项目原始代码采用 [MIT 许可证](LICENSE)。第三方组件保持各自许可，见 [第三方说明](THIRD_PARTY_NOTICES.md)；可选 Qt GUI 另受 Qt / PySide 的许可约束。安全使用与报告方式见 [SECURITY.md](SECURITY.md)。

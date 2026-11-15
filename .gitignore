@@ -12,8 +12,11 @@
 /ev/web_assets/*
 !/.gitattributes
 !/.gitignore
+!/LICENSE
 !/PUBLISHING.md
 !/README.md
+!/SECURITY.md
+!/THIRD_PARTY_NOTICES.md
 !/VERSION
 !/docs/cli.md
 !/docs/groups.md
