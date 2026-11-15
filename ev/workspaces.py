@@ -26,24 +26,35 @@ def normalized_name(value):
 
 
 class WorkspaceRegistry:
-    def __init__(self, root):
+    def __init__(self, root, *, read_only=None):
         self.root = Path(root).expanduser().resolve()
         self.state = self.root / ".expvault"
         self.container = self.root / CONTAINER
         if self.state.is_symlink() or self.container.is_symlink():
             raise ValueError("工作空间目录不能使用符号链接")
-        self.state.mkdir(exist_ok=True)
+        from . import nas
+        self.nas = nas.is_nas(self.root)
+        self.read_only = read_only if read_only is not None else self.nas and nas.writer(self.root) is None
+        if self.nas:
+            nas.assert_available(self.root)
+            if not self.state.is_dir():
+                raise ValueError("NAS 工作空间目录不可访问")
+        else:
+            self.state.mkdir(exist_ok=True)
         self.path = self.state / CATALOG
         if self.path.is_symlink() or (self.state / "workspaces.lock").is_symlink():
             raise ValueError("工作空间目录记录不能使用符号链接")
-        self.lock = FileLock(str(self.state / "workspaces.lock"), timeout=5)
+        local = nas.local_dir(self.root)/"state" if self.nas else self.state
+        local.mkdir(parents=True, exist_ok=True)
+        self.selection_path = local/"selected-workspace.json" if self.nas else None
+        self.lock = FileLock(str(local / "workspaces.lock"), timeout=5)
 
     @classmethod
-    def locate(cls, root):
+    def locate(cls, root, *, read_only=None):
         root = Path(root).expanduser().resolve()
         marker = root / ".expvault" / MARKER
         if not marker.exists():
-            return cls(root), DEFAULT
+            return cls(root, read_only=read_only), DEFAULT
         if marker.is_symlink():
             raise ValueError("工作空间归属记录无效")
         try:
@@ -51,7 +62,7 @@ class WorkspaceRegistry:
             if set(value) != {"id", "home"} or value["home"] != "../..":
                 raise ValueError
             home = (root / value["home"]).resolve()
-            registry = cls(home)
+            registry = cls(home, read_only=read_only)
             if registry.location(value["id"]) != root or value["id"] == DEFAULT:
                 raise ValueError
             registry.get(value["id"])
@@ -125,7 +136,10 @@ class WorkspaceRegistry:
         with self.lock:
             value = self._read()
             items = [{"id": DEFAULT, "name": "默认工作空间", "created_at": ""}, *value["items"]]
-            return {"items": [self._public(item) for item in items], "selected": value["selected"]}
+            selected=value["selected"]
+            if self.nas and self.selection_path.is_file():
+                selected=nas_read_selection(self.selection_path, {item["id"] for item in items})
+            return {"items": [self._public(item) for item in items], "selected": selected}
 
     def get(self, workspace_id):
         result = next((item for item in self.list()["items"] if item["id"] == workspace_id), None)
@@ -134,6 +148,11 @@ class WorkspaceRegistry:
         return result
 
     def create(self, name, *, operator="", project=""):
+        if self.nas:
+            from . import nas
+            if self.read_only:
+                raise ValueError("NAS 只读连接不能新建工作空间")
+            nas.require_writer(config.load(self.root))
         if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 80
                 or any(ord(char) < 32 or ord(char) == 127 for char in name)):
             raise ValueError("请填写 1–80 字的工作空间名称，不含控制字符")
@@ -176,9 +195,18 @@ class WorkspaceRegistry:
                                      {"id": DEFAULT, "name": "默认工作空间", "created_at": ""}))
             if not item["available"]:
                 raise ValueError(item["error"])
-            value["selected"] = workspace_id
-            self._write(value)
+            if self.nas:
+                write_json(self.selection_path, {"selected":workspace_id})
+            else:
+                value["selected"] = workspace_id
+                self._write(value)
             return item
+
+
+def nas_read_selection(path, allowed):
+    from . import nas
+    value=nas.read_object(path).get("selected", DEFAULT)
+    return value if value in allowed else DEFAULT
 
 
 class WorkspaceHub:
@@ -191,7 +219,11 @@ class WorkspaceHub:
         self.servers = {}
         self.closed = False
         from .sync import SyncCoordinator
-        self.sync = SyncCoordinator(registry)
+        if registry.nas:
+            from .nas import NoSync
+            self.sync = NoSync(registry.root)
+        else:
+            self.sync = SyncCoordinator(registry)
 
     def register(self, workspace_id, server):
         with self.lock:
@@ -209,7 +241,9 @@ class WorkspaceHub:
             item = self.registry.get(workspace_id)
             if not item["available"]:
                 raise ValueError(item["error"])
-            return WebServer(item["root"], host=self.host, port=0, hub=self, workspace_id=workspace_id).start()
+            return WebServer(item["root"], host=self.host, port=0, hub=self, workspace_id=workspace_id,
+                             nas_mode=("viewer" if self.registry.read_only else "writer") if self.registry.nas else None,
+                             libraries=getattr(self, "libraries", None)).start()
 
     def create(self, **values):
         with self.lock:

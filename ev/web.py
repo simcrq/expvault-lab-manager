@@ -65,7 +65,7 @@ def byte_range(value, size):
 
 
 class WebServer:
-    def __init__(self, root, *, host="127.0.0.1", port=8765, ttl=12*3600, hub=None, workspace_id=None):
+    def __init__(self, root, *, host="127.0.0.1", port=8765, ttl=12*3600, hub=None, workspace_id=None, nas_mode=None, libraries=None):
         try:
             ip = ipaddress.ip_address(host)
         except ValueError:
@@ -73,14 +73,21 @@ class WebServer:
         if ip.version != 4 or not ip.is_private or ip.is_unspecified or ip.is_multicast or ip.is_link_local:
             raise ValueError("网页服务只能绑定明确的本机或局域网 IPv4 地址，不能使用 0.0.0.0 或公网地址")
         self.owns_hub = hub is None
+        from . import nas
+        if nas.is_nas(root):
+            nas_mode = nas_mode or ("writer" if nas.writer(root) else "viewer")
+            if nas_mode not in ("viewer", "writer"):
+                raise ValueError("NAS 连接方式无效")
+            if nas_mode == "writer":
+                nas.require_writer(config.load(root))
         if hub is None:
-            registry, workspace_id = WorkspaceRegistry.locate(root)
+            registry, workspace_id = WorkspaceRegistry.locate(root, read_only=nas_mode == "viewer" if nas_mode else None)
             hub = WorkspaceHub(registry, host=host, ttl=ttl)
         if hub.registry.location(workspace_id) != Path(root).expanduser().resolve():
             raise ValueError("工作空间目录与编号不匹配")
         self.hub, self.workspace_id = hub, workspace_id
         workspace = hub.registry.get(workspace_id)
-        self.service = WebService(root)
+        self.service = WebService(root, nas_mode=nas_mode)
         self.service.sync_root = hub.registry.root
         self.pairing = WebPairing(self.service, workspace_name=workspace["name"])
         self.token = secrets.token_urlsafe(32)
@@ -91,6 +98,14 @@ class WebServer:
         self.upload_slots = threading.BoundedSemaphore(2)
         self.thread = None
         owner = self
+        if libraries is None:
+            libraries = getattr(hub, "libraries", None)
+        self.owns_libraries = libraries is None
+        if libraries is None:
+            from .nas_libraries import LibrarySessions
+            libraries = LibrarySessions(self)
+        self.libraries = libraries
+        hub.libraries = libraries
 
         class Handler(BaseHTTPRequestHandler):
             server_version = "expvault"
@@ -237,7 +252,11 @@ class WebServer:
                     return
                 self.authorize()
                 query = self.query(url)
-                if url.path == "/api/file":
+                if url.path == "/api/nas/libraries":
+                    if not self.local_controls():
+                        raise WebError("请在本机浏览器管理 NAS 连接", status=403)
+                    self.respond(200, self.workspace_action(owner.libraries.list))
+                elif url.path == "/api/file":
                     with owner.service.context() as ctx:
                         rec = owner.service.record(ctx, query.get("exp_id", ""))
                         path = owner.service.file_path(ctx, rec, query.get("path", ""))
@@ -255,6 +274,8 @@ class WebServer:
                         raise WebError("请在本机浏览器查看或配置同步", status=403)
                     self.respond(200, owner.hub.sync.public())
                 elif url.path == "/api/sync/logs":
+                    if owner.service.nas_mode:
+                        raise WebError("NAS 共享库不启用双向同步")
                     if not self.local_controls():
                         raise WebError("请在本机浏览器查看同步日志", status=403)
                     try:
@@ -272,6 +293,7 @@ class WebServer:
                     raise WebError("页面不存在", status=404)
 
             def upload(self, query):
+                owner.service.require_write()
                 exp_id = query.get("exp_id", "")
                 with owner.service.context() as ctx:
                     owner.service.record(ctx, exp_id)
@@ -324,11 +346,22 @@ class WebServer:
                     self.upload(self.query(url))
                     return
                 value = self.body_json()
-                if url.path == "/api/session":
+                if url.path == "/api/nas/open":
+                    if not self.local_controls():
+                        raise WebError("请在本机浏览器连接 NAS", status=403)
+                    if not set(value) <= {"root", "mode", "name", "initialize", "connection_id"}:
+                        raise WebError("NAS 连接字段无效")
+                    self.respond(200, self.workspace_action(lambda: owner.libraries.open(**value)))
+                elif url.path == "/api/nas/refresh":
+                    if value:
+                        raise WebError("NAS 刷新不接受其他字段")
+                    self.respond(200, self.workspace_action(owner.service.refresh_nas))
+                elif url.path == "/api/session":
                     session = owner.service.read("session", {})
                     session["workspace"] = self.workspace_action(lambda: owner.hub.registry.get(owner.workspace_id))
                     self.respond(200, session, cookie=True)
                 elif url.path == "/api/workspaces":
+                    owner.service.require_write()
                     if not {"name"} <= set(value) <= {"name", "operator", "project"}:
                         raise WebError("工作空间创建字段无效")
                     self.respond(201, self.workspace_action(lambda: owner.hub.create(**value)))
@@ -348,12 +381,14 @@ class WebServer:
                         result = self.workspace_action(lambda: owner.hub.sync.action(action, **value))
                     self.respond(200, result)
                 elif url.path == "/api/connectivity/hotspot":
+                    owner.service.require_write()
                     if not self.local_controls():
                         raise WebError("请在这台电脑的本机浏览器中控制 Windows 热点", status=403)
                     if set(value) != {"action"} or not isinstance(value["action"], str):
                         raise WebError("热点操作字段无效")
                     self.respond(200, owner.pairing.change_hotspot(value["action"]))
                 elif url.path == "/api/pairings":
+                    owner.service.require_write()
                     if set(value) != {"exp_id", "host"} or not all(isinstance(item, str) for item in value.values()):
                         raise WebError("手机接收字段无效")
                     self.respond(201, owner.pairing.create(value["exp_id"], value["host"]))
@@ -429,6 +464,8 @@ class WebServer:
 
     def close(self, *, _hub_closing=False):
         if self.owns_hub and not _hub_closing:
+            if self.owns_libraries:
+                self.libraries.close()
             self.hub.close()
             return
         if self.stopped.is_set():
@@ -452,8 +489,8 @@ class WebServer:
                 self.hub.servers.pop(self.workspace_id)
 
 
-def run(root, *, host="127.0.0.1", port=8765, open_browser=True):
-    server = WebServer(root, host=host, port=port).start()
+def run(root, *, host="127.0.0.1", port=8765, open_browser=True, nas_mode=None):
+    server = WebServer(root, host=host, port=port, nas_mode=nas_mode).start()
     try:
         entry_url = server.url
         if server.workspace_id == DEFAULT:

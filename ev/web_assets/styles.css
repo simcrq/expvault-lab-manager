@@ -1791,6 +1791,18 @@ input[type="radio"] {
 #sync-mode-fields {
   grid-column: 1 / -1;
 }
+.sync-settings-form,
+.sync-webdav-fields {
+  gap: 14px;
+}
+.sync-settings-form .field-hint {
+  margin: 0;
+  line-height: 1.65;
+}
+.sync-settings-form > .field-hint,
+.sync-webdav-fields > .field-hint {
+  grid-column: 1 / -1;
+}
 .sync-pairing-code {
   width: 100%;
   margin-top: 18px;
@@ -2308,6 +2320,7 @@ input[type="radio"] {
 }
 input[type="text"],
 input[type="password"],
+input[type="url"],
 input[type="date"],
 input[type="number"],
 textarea,
@@ -2996,6 +3009,7 @@ label {
   }
   input[type="text"],
   input[type="password"],
+  input[type="url"],
   input[type="date"],
   input[type="number"],
   textarea {
@@ -3389,4 +3403,61 @@ sup {
     width: 20px;
     padding-top: 3px;
   }
+}
+
+.nas-library-button {
+  width: calc(100% - 32px);
+  margin: 12px 16px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.nas-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+}
+.nas-banner strong {
+  color: var(--action);
+  font-size: 14px;
+}
+.nas-banner small,
+.nas-location {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.nas-library-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 20px 0;
+}
+.nas-connection {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+.nas-connection h3 {
+  font-size: 15px;
+}
+.nas-connection p {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.nas-connection small {
+  display: block;
+  margin: 8px 0 12px;
+  color: var(--muted);
 }

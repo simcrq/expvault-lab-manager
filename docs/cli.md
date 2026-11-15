@@ -101,3 +101,9 @@ python expvault.py --root "实验库" adopt "旧实验目录" --title "旧样品
 `adopt` 默认复制旧目录，核对后再自行整理来源；新手不要先加 `--move`。
 Excel 导出使用 `openpyxl`，独立包的依赖清单已包含；源码环境缺少它时可降级导出 CSV。
 需要指定文件路径、课题筛选或其他选项时，以相应命令的 `-h` 为准。
+
+## NAS 挂载目录
+
+可使用 `python expvault.py nas connect "挂载路径" --mode viewer` 直接只读打开 NAS 库。
+编辑主机使用 `--mode writer`；首次建立或转换时添加 `--init`。
+普通 `--root` 查询 NAS 库默认只读，写命令需要 `--nas-write` 并取得编辑占用。详见 [NAS 使用指南](nas.md)。

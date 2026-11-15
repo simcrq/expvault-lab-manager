@@ -14,6 +14,7 @@ import time
 import unicodedata
 import uuid
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from urllib.parse import urlsplit
 
 from filelock import FileLock, Timeout
 
@@ -24,6 +25,7 @@ from .sync_merge import encoded, digest, merge_states, normalize_state, choose_c
 from .sync_transport import Repository, HTTPSRepository, LANServer, MAX_COMMIT, HEX, CHUNK
 from .sync_activity import SyncActivity
 from .sync_transport import machine_name
+from .sync_webdav import WebDAVRepository, WebDAVError, coordinates, device_id, DEFAULT_URL
 from .util import now_iso, read_json, write_json
 from .workspaces import WorkspaceRegistry, DEFAULT
 
@@ -52,6 +54,9 @@ def uid(value):
 
 class SyncEngine:
     def __init__(self, registry):
+        from .nas import is_nas
+        if is_nas(registry.root):
+            raise ValueError("NAS 共享库直接读取同一份资料，不能同时启用双向同步")
         self.registry = registry
         self.root = registry.root
         self.state_dir = self.root / ".expvault" / "sync"
@@ -73,8 +78,9 @@ class SyncEngine:
     def excluded(self, relative, value, settings):
         suffix = PurePosixPath(relative).suffix.lower()
         return (suffix in VIDEOS and not settings.get("include_videos", True)
-                or suffix in PHOTOS and settings.get("photo_limit_mb", 0) > 0
-                and value.get("size", 0) > settings["photo_limit_mb"]*1024**2)
+                or suffix in PHOTOS and (not settings.get("include_photos", True)
+                    or settings.get("photo_limit_mb", 0) > 0
+                    and value.get("size", 0) > settings["photo_limit_mb"]*1024**2))
 
     def blob(self, path):
         path = Path(path)
@@ -567,7 +573,7 @@ class SyncEngine:
             if workspace in roots:
                 plan(roots[workspace].root/"问题记录.jsonl", b"".join(encoded(value)+b"\n" for value in values))
         next_current = {"head":head,"state":state,"deferred":deferred,
-                        "filters":{"include_videos":settings.get("include_videos", True),"photo_limit_mb":settings.get("photo_limit_mb", 0)}}
+                        "filters":{"include_photos":settings.get("include_photos", True),"include_videos":settings.get("include_videos", True),"photo_limit_mb":settings.get("photo_limit_mb", 0)}}
         plan(self.current_path, encoded(next_current))
         values = list(operations.values())
         for relative, operation in generated.items():
@@ -618,6 +624,8 @@ class SyncEngine:
                     announce(parent)
                 transport.receive(self.cache, "commits", key, self.stop)
             announce(head)
+            if isinstance(transport, WebDAVRepository):
+                transport.publish_head(head)
             self.report(phase="history",label="读取远端变更记录",reset=True)
             graph = self.graph(transport)
             graph.setdefault(head, json.loads(self.cache.get("commits", head)))
@@ -648,7 +656,7 @@ class SyncEngine:
                 merged_head = self.commit(merged, [merged_head, other])
                 graph[merged_head] = json.loads(self.cache.get("commits", merged_head))
             self.transfer_objects(merged, transport, settings, upload=False)
-            filters = {"include_videos":settings.get("include_videos", True),"photo_limit_mb":settings.get("photo_limit_mb", 0)}
+            filters = {"include_photos":settings.get("include_photos", True),"include_videos":settings.get("include_videos", True),"photo_limit_mb":settings.get("photo_limit_mb", 0)}
             if merged_head == current["head"] and merged == current["state"] and current.get("filters") == filters:
                 return {"last_sync":now_iso(),"experiments":len(merged["experiments"]),"workspaces":len(merged["workspaces"]),
                         "skipped_files":self.skipped,"conflicts":sum(not value.get("resolved") for value in merged["conflicts"].values())}
@@ -669,6 +677,8 @@ class SyncEngine:
             self.transfer_objects(merged, transport, settings, upload=True)
             self.report(phase="publish",label="发布合并结果",reset=True)
             announce(merged_head)
+            if isinstance(transport, WebDAVRepository):
+                transport.publish_head(merged_head)
             return {"last_sync":now_iso(),"experiments":len(merged["experiments"]),"workspaces":len(merged["workspaces"]),
                     "skipped_files":self.skipped,"conflicts":sum(not value.get("resolved") for value in merged["conflicts"].values())}
 
@@ -678,7 +688,7 @@ class SyncCoordinator:
         self.engine = SyncEngine(registry)
         self.settings_path = self.engine.state_dir/"settings.json"
         self.status_path = self.engine.state_dir/"status.json"
-        self.settings = read_json(self.settings_path, {"enabled":False,"mode":"","interval":30,"include_videos":True,"photo_limit_mb":0})
+        self.settings = read_json(self.settings_path, {"enabled":False,"mode":"","interval":30,"include_photos":True,"include_videos":True,"photo_limit_mb":0})
         self.status = read_json(self.status_path, {})
         self.status["running"] = False
         self.connection = {}
@@ -691,10 +701,16 @@ class SyncCoordinator:
         self.closed = threading.Event()
         self.thread = None
         self.server = None
+        self.webdav = None
         self.pending_resolution = None
 
     def redact(self, value):
-        for secret in (self.settings.get("token"),self.settings.get("pairing",{}).get("token")):
+        password = self.settings.get("webdav_password")
+        basic = None
+        if password:
+            import base64
+            basic = base64.b64encode((self.settings.get("webdav_username", "") + ":" + password).encode()).decode()
+        for secret in (self.settings.get("token"),self.settings.get("pairing",{}).get("token"),password,basic):
             if secret:
                 value = value.replace(secret,"[已隐藏密钥]")
         return value
@@ -714,6 +730,9 @@ class SyncCoordinator:
             result["address"] = settings["pairing"]["url"]
         elif mode == "folder":
             result.update(address=settings["folder"],hostname="共享目录中转")
+        elif mode == "webdav":
+            result.update(address=settings["webdav_url"] + settings["webdav_folder"] + "/expvault-webdav-v1/",
+                          hostname="坚果云 WebDAV" if urlsplit(settings["webdav_url"]).hostname == "dav.jianguoyun.com" else "WebDAV 云端中转")
         elif mode == "lan-host":
             result.update(address=f'https://{settings["host"]}:{settings["port"]}',hostname=machine_name(),
                           peers=server.connections() if server else [],state="listening" if server else "unverified")
@@ -722,7 +741,7 @@ class SyncCoordinator:
         return result
 
     def check_connection(self, transport):
-        if isinstance(transport, HTTPSRepository):
+        if isinstance(transport, (HTTPSRepository, WebDAVRepository)):
             info = transport.info()
         else:
             info = {"hostname":"共享目录中转" if self.settings["mode"] == "folder" else machine_name()}
@@ -766,19 +785,28 @@ class SyncCoordinator:
             return repository
         if settings["mode"] == "lan-client":
             return HTTPSRepository(**settings["pairing"])
+        if settings["mode"] == "webdav":
+            if not self.webdav:
+                self.webdav = WebDAVRepository(settings["webdav_url"], settings["webdav_username"], settings["webdav_password"], settings["webdav_folder"],
+                    cache=self.engine.cache, device=device_id(self.engine.root), channel=settings["channel"], stop=self.engine.stop)
+            return self.webdav
         raise ValueError("请先配置同步方式")
 
     def configure(self, values):
-        allowed = {"mode","folder","host","port","pairing","interval","include_videos","photo_limit_mb"}
+        allowed = {"mode","folder","host","port","pairing","interval","include_photos","include_videos","photo_limit_mb",
+                   "webdav_url","webdav_username","webdav_password","webdav_folder"}
         if not isinstance(values, dict) or set(values)-allowed:
             raise ValueError("同步配置字段无效")
         mode = values.get("mode")
-        interval, limit = values.get("interval",30), values.get("photo_limit_mb",0)
-        if mode not in ("folder","lan-host","lan-client") or type(interval) is not int or not 5 <= interval <= 3600:
+        interval, limit = values.get("interval",300 if mode == "webdav" else 30), values.get("photo_limit_mb",0)
+        if mode not in ("folder","lan-host","lan-client","webdav") or type(interval) is not int or not 5 <= interval <= 3600:
             raise ValueError("请选择同步方式，自动同步间隔为 5–3600 秒")
-        if type(limit) not in (int,float) or not 0 <= limit <= 100000 or not isinstance(values.get("include_videos",True), bool):
+        if mode == "webdav" and interval < 60:
+            raise ValueError("WebDAV 自动检查间隔至少 60 秒，坚果云建议使用 300 秒或更长")
+        if type(limit) not in (int,float) or not 0 <= limit <= 100000 or any(not isinstance(values.get(key,True),bool) for key in ("include_photos","include_videos")):
             raise ValueError("照片上限必须是非负 MB 数值，0 表示不限")
-        settings = {"mode":mode,"enabled":True,"interval":interval,"include_videos":values.get("include_videos",True),"photo_limit_mb":limit}
+        settings = {"mode":mode,"enabled":True,"interval":interval,"include_photos":values.get("include_photos",True),"include_videos":values.get("include_videos",True),"photo_limit_mb":limit}
+        candidate = None
         if mode == "folder":
             folder = Path(values.get("folder", "")).expanduser()
             if not folder.is_absolute():
@@ -809,12 +837,29 @@ class SyncCoordinator:
             old = self.settings
             token = old.get("token") if old.get("mode") == mode and old.get("host") == host and old.get("port") == port else None
             settings.update(host=host, port=port, token=token or secrets.token_urlsafe(32))
-        else:
+        elif mode == "lan-client":
             pairing = values.get("pairing", self.settings.get("pairing") if self.settings.get("mode") == mode else None)
             if not isinstance(pairing, dict) or set(pairing) != {"url","token","fingerprint"}:
                 raise ValueError("请粘贴另一台电脑提供的完整配对信息")
             HTTPSRepository(**pairing)
             settings["pairing"] = pairing
+        else:
+            url = values.get("webdav_url", DEFAULT_URL)
+            username = values.get("webdav_username", "")
+            password = values.get("webdav_password", "")
+            folder = values.get("webdav_folder", "ExpVault")
+            # A blank password only reuses credentials for the very same endpoint and account.
+            if password == "" and self.settings.get("mode") == mode:
+                old_url = self.settings.get("webdav_url")
+                old_user = self.settings.get("webdav_username")
+                normalized = coordinates(url, username, self.settings["webdav_password"], folder)
+                if normalized[:2] == (old_url, old_user):
+                    password = self.settings["webdav_password"]
+            url, username, password, folder = coordinates(url, username, password, folder)
+            device = device_id(self.engine.root)
+            candidate = WebDAVRepository(url, username, password, folder, cache=self.engine.cache, device=device)
+            channel = candidate.initialize()
+            settings.update(webdav_url=url, webdav_username=username, webdav_password=password, webdav_folder=folder, channel=channel)
         self.engine.stop.set()
         if not self.work_lock.acquire(timeout=20):
             raise ValueError("正在完成文件回滚，请稍后再配置")
@@ -825,12 +870,25 @@ class SyncCoordinator:
             if self.server:
                 self.server.close()
                 self.server = None
-            changed_channel = (previous.get("mode"),previous.get("channel"),previous.get("pairing",{}).get("url"),previous.get("pairing",{}).get("fingerprint")) != (settings.get("mode"),settings.get("channel"),settings.get("pairing",{}).get("url"),settings.get("pairing",{}).get("fingerprint"))
+            def identity(value):
+                return (value.get("mode"),value.get("channel"),value.get("pairing",{}).get("url"),value.get("pairing",{}).get("fingerprint"),
+                        value.get("webdav_url"),value.get("webdav_folder"),value.get("webdav_username"))
+            changed_channel = identity(previous) != identity(settings)
+            previous_webdav, self.webdav = self.webdav, candidate
+            if candidate:
+                if previous_webdav and not changed_channel:
+                    candidate.present.update(previous_webdav.present)
+                    candidate.known_directories.update(previous_webdav.known_directories)
+                    candidate.head_cache.update(previous_webdav.head_cache)
+                    if candidate.device == previous_webdav.device:
+                        candidate.published = previous_webdav.published
+                candidate.stop = self.engine.stop
             self.settings = settings
             try:
                 self.transport()
             except Exception:
                 self.settings = previous
+                self.webdav = previous_webdav
                 raise
             if changed_channel and self.engine.current_path.exists():
                 shutil.copy2(self.engine.current_path, self.engine.state_dir/("previous-channel-"+uuid.uuid4().hex+".json"))
@@ -840,8 +898,10 @@ class SyncCoordinator:
                 self.connection = {}
                 write_json(self.status_path,self.status)
             self.save_settings()
+            self.status.pop("retry_at", None)
+            write_json(self.status_path,self.status)
             self.engine.stop.clear()
-            self.activity.log("info", "同步设置已保存："+{"folder":"共享目录中转","lan-host":"局域网接收电脑","lan-client":"连接另一电脑"}[mode],phase="configuration",force=True)
+            self.activity.log("info", "同步设置已保存："+{"folder":"共享目录中转","lan-host":"局域网接收电脑","lan-client":"连接另一电脑","webdav":"WebDAV 云端中转"}[mode],phase="configuration",force=True)
         finally:
             self.work_lock.release()
         self.start()
@@ -850,7 +910,9 @@ class SyncCoordinator:
 
     def public(self):
         with self.guard:
-            settings = {key:value for key,value in self.settings.items() if key not in ("token","pairing","channel")}
+            settings = {key:value for key,value in self.settings.items() if key not in ("token","pairing","channel","webdav_password","webdav_device")}
+            if self.settings.get("mode") == "webdav":
+                settings["webdav_password_saved"] = bool(self.settings.get("webdav_password"))
             if self.settings.get("pairing"):
                 settings["peer_url"] = self.settings["pairing"]["url"]
             current = self.engine.current()["state"]
@@ -932,6 +994,11 @@ class SyncCoordinator:
                     self.wake.clear()
                     continue
             if self.settings.get("enabled") and self.settings.get("mode"):
+                retry = self.status.get("retry_at", 0) - time.time()
+                if retry > 0:
+                    self.wake.wait(min(retry, self.settings.get("interval",30)))
+                    self.wake.clear()
+                    continue
                 with self.work_lock:
                     if self.closed.is_set():
                         break
@@ -947,6 +1014,7 @@ class SyncCoordinator:
                         result = self.engine.cycle(transport, self.settings, self.pending_resolution)
                         self.pending_resolution = None
                         self.status.update(result)
+                        self.status.pop("retry_at", None)
                         self.last_applied_at = time.time()
                         self.activity.finish("complete",f'同步完成：{result["experiments"]} 个实验，{result["workspaces"]} 个工作空间；跳过 {result["skipped_files"]} 个文件，待处理冲突 {result["conflicts"]} 处')
                     except Timeout:
@@ -955,6 +1023,12 @@ class SyncCoordinator:
                     except InterruptedError:
                         self.status["error"] = "同步已暂停，完整数据仍保留"
                         self.activity.finish("paused",self.status["error"])
+                    except WebDAVError as exc:
+                        self.status["error"] = self.redact(str(exc))
+                        if exc.retry_after:
+                            self.status["retry_at"] = time.time() + exc.retry_after
+                        self.connection["state"] = "unverified"
+                        self.activity.finish("error",self.status["error"])
                     except Exception as exc:
                         self.status["error"] = self.redact(str(exc))
                         self.connection["state"] = "unverified"

@@ -194,6 +194,8 @@ _（随便写，`expvault doc` 重新生成时会保留本段之后的内容）_
 
 def write_readme(ctx: Ctx, meta: dict, files: list[dict] | None = None,
                  folder: Path | None = None) -> None:
+    from .nas import require_writer
+    require_writer(ctx)
     if folder is None:
         rel = meta.get("folder") or ""
         if not rel:
@@ -292,6 +294,8 @@ def create(
     groups: list[str] | None = None,
     _creation_log: list | None = None,
 ) -> dict:
+    from .nas import require_writer
+    require_writer(ctx)
     import uuid
     from .measurements import normalize
     from .groups import normalize_names
@@ -586,6 +590,8 @@ def add_files(ctx: Ctx, rec: dict, paths: list[Path], role: str = "", move: bool
         "hard"  只建硬链接（同盘、不占额外空间，改一个两边都变）
         "soft"  只建符号链接（可跨盘，但源文件一移走就断）
     """
+    from .nas import require_writer
+    require_writer(ctx)
     folder = exp_dir(ctx, rec)
     results = {"copied": [], "skipped": [], "errors": [], "already": [],
                "link_stats": {"hard": 0, "soft": 0, "copy": 0, "skip": 0}}
@@ -744,6 +750,8 @@ def remove_files(ctx: Ctx, rec: dict, patterns: list[str], *, delete_disk: bool 
 
     patterns 支持通配符；目录需要 recursive=True。
     """
+    from .nas import require_writer
+    require_writer(ctx)
     folder = exp_dir(ctx, rec)
     out = {"removed": [], "failed": [], "dirs": 0, "files": 0}
     targets = ([Path(p) if Path(p).is_absolute() else folder / p for p in patterns]
@@ -849,6 +857,10 @@ def verify(ctx: Ctx, *, rehash: bool = True, exp_id: str = "") -> dict:
                     (rec["id"], f["relpath"]),
                 )
             digest = sha256_file(p) if rehash else f["sha256"]
+            from .nas import is_nas
+            if is_nas(ctx) and not f["sha256"]:
+                report.setdefault("unverified", []).append({"exp_id": rec["id"], "relpath": f["relpath"]})
+                continue
             if digest != f["sha256"]:
                 report["modified"].append(
                     {"exp_id": rec["id"], "relpath": f["relpath"],
@@ -878,6 +890,8 @@ EDITABLE = ["title", "date", "project", "operator", "device", "batch", "category
 
 
 def update(ctx: Ctx, rec: dict, changes: dict) -> dict:
+    from .nas import require_writer
+    require_writer(ctx)
     from .measurements import normalize
     if "measurement_groups" in changes:
         changes = {**changes, "measurement_groups": normalize(changes["measurement_groups"])}
@@ -931,6 +945,8 @@ def update(ctx: Ctx, rec: dict, changes: dict) -> dict:
 
 
 def append_note(ctx: Ctx, rec: dict, text: str, author: str = "", *, references=None) -> Path:
+    from .nas import require_writer
+    require_writer(ctx)
     from . import journal
     folder = exp_dir(ctx, rec)
     notes_dir = folder / "04_notes"
@@ -960,6 +976,8 @@ def append_note(ctx: Ctx, rec: dict, text: str, author: str = "", *, references=
 
 
 def archive(ctx: Ctx, rec: dict, flag: bool = True) -> None:
+    from .nas import require_writer
+    require_writer(ctx)
     folder = exp_dir(ctx, rec)
     meta = load_meta(folder) or {}
     meta["archived"] = 1 if flag else 0
@@ -997,6 +1015,8 @@ def rebuild_index(ctx: Ctx) -> dict:
 # 导入已有目录
 # --------------------------------------------------------------------------
 def adopt(ctx: Ctx, src: Path, *, move: bool = False, title: str = "", **fields) -> dict:
+    from .nas import require_writer
+    require_writer(ctx)
     src = Path(src).resolve()
     if not src.is_dir():
         raise ValueError(f"不是文件夹：{src}")

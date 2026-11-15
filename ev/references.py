@@ -47,6 +47,12 @@ def resolve(ctx, owner, items):
         stat = path.stat()
         if stat.st_size != indexed["size"] or abs(stat.st_mtime-indexed["mtime"]) > .000001:
             raise ValueError("引用的原文件已在外部变化，请先扫描或校验来源实验，再重新选择")
+        from .nas import is_nas
+        if is_nas(ctx) and not indexed.get("sha256"):
+            from .util import sha256_file
+            indexed={**indexed,"sha256":sha256_file(path)}
+            ctx.db.upsert_file(item["exp_id"],indexed)
+            ctx.db.commit()
         result.append({**item, "name": path.name, "experiment_title": source["title"],
                        "sha256": indexed.get("sha256", ""), "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
                        "tags": normalize_tags(indexed.get("tags", [])),
@@ -64,6 +70,14 @@ def decorate(ctx, items):
             value.update(experiment_title=rec["title"], current_tags=indexed.get("tags", []),
                          changed=stat.st_size != item.get("size") or abs(stat.st_mtime-indexed["mtime"]) > .000001
                          or indexed.get("sha256", "") != item.get("sha256", ""))
+            from .nas import is_nas
+            if is_nas(ctx):
+                current_hash=indexed.get("sha256", "")
+                old_hash=item.get("sha256", "")
+                value["checksum_unknown"]=not bool(current_hash and old_hash)
+                old_time=item.get("mtime_ns")
+                value["changed"]=(stat.st_size!=item.get("size") or (old_time is not None and abs(stat.st_mtime-old_time/1e9)>.000001)
+                    or bool(current_hash and old_hash and current_hash!=old_hash))
         except (ValueError, OSError, KeyError):
             value["missing"] = True
         result.append(value)

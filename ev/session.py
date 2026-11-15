@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from .config import Ctx
 from .util import now_iso, read_json, truncate, write_json
 
@@ -11,7 +13,7 @@ STATE_REL = ".expvault/session.json"
 
 
 def state_path(ctx: Ctx):
-    return ctx.root / STATE_REL
+    return ctx.meta_dir / Path(STATE_REL).name
 
 
 def get_current_id(ctx: Ctx) -> str:

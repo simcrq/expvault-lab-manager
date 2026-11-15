@@ -31,7 +31,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="独立实验管理系统：首次启动创建自己的空实验库")
     version_path = APP_DIR / "VERSION"
     parser.add_argument("--version", action="version", version="实验管理系统 " + (version_path.read_text(encoding="utf-8").strip() if version_path.is_file() else "development"))
-    parser.add_argument("--root", type=Path, default=APP_DIR / "实验库", help="实验库目录，默认程序旁的 实验库/")
+    location = parser.add_mutually_exclusive_group()
+    location.add_argument("--root", type=Path, default=APP_DIR / "实验库", help="实验库目录，默认程序旁的 实验库/")
+    location.add_argument("--nas", type=Path, help="系统已挂载的 NAS 实验库路径，不会自动创建替代库")
+    parser.add_argument("--nas-mode", choices=("writer", "viewer"), default="viewer", help="NAS writer 编辑主机，默认 viewer 只读查看")
+    parser.add_argument("--init-nas", action="store_true", help="将 --nas 指定的目录初始化为共享库，仅用于编辑主机")
     parser.add_argument("--host", default="127.0.0.1", help="默认仅本机；局域网访问须指定私有 IPv4 地址")
     parser.add_argument("--port", type=int, default=0, help="默认自动分配空闲端口")
     parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
@@ -53,7 +57,16 @@ def main(argv=None):
         if args.check:
             print(f"实验管理系统 {version}：程序完整性与依赖检查通过；未创建实验库。")
             return 0
-        root = args.root.expanduser().resolve()
+        from ev import nas
+        root = (args.nas or args.root).expanduser().resolve()
+        if args.init_nas:
+            if not args.nas or args.nas_mode != "writer":
+                raise ValueError("初始化 NAS 请同时指定 --nas 路径和 --nas-mode writer")
+            root = nas.initialize(root)
+        if args.nas or nas.is_nas(root) or nas.is_known_path(root):
+            nas.assert_available(root)
+            with nas.access(root, args.nas_mode):
+                return run(root, host=args.host, port=args.port, open_browser=not args.no_open, nas_mode=args.nas_mode)
         root.mkdir(parents=True, exist_ok=True)
         state = root / ".expvault"
         if state.is_symlink():

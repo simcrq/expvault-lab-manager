@@ -417,6 +417,14 @@ async function boot() {
       1,
     );
     $("operator-avatar").title = state.session.operator || "本机使用者";
+    if (state.session.storage) {
+      $("sidebar").querySelector(".sidebar-tip strong").textContent =
+        "资料保存在 NAS";
+      $("sidebar").querySelector(".sidebar-tip p").textContent = state.session
+        .storage.read_only
+        ? "当前为只读查看。编辑请使用主机连接；共享断开后请先在系统中重新挂载。"
+        : "当前为编辑主机。其他电脑可挂载同一共享，以只读方式查看。";
+    }
     $("connection-label").textContent =
       location.hostname === "localhost" || location.hostname === "127.0.0.1"
         ? "本机工作台已连接"
@@ -515,8 +523,103 @@ function pageHeading(kicker, title, description, actions = "") {
 function empty(title, description, action = "") {
   return `<div class="empty-state">${icon("flask")}<h3>${e(title)}</h3><p>${e(description)}</p>${action}</div>`;
 }
+const nasWriteActions = new Set([
+  "new-experiment",
+  "edit-experiment",
+  "edit-parameters",
+  "edit-status",
+  "add-instrument",
+  "edit-instrument",
+  "add-measurement",
+  "edit-measurement",
+  "copy-measurement",
+  "duplicate-experiment",
+  "batch-experiments",
+  "import",
+  "phone-import",
+  "add-step",
+  "edit-step",
+  "add-note",
+  "note-references",
+  "edit-file-tags",
+  "delete-files",
+  "archive",
+  "scan",
+  "backup",
+  "new-workspace",
+  "bulk-add-groups",
+  "bulk-remove-groups",
+  "edit-experiment-groups",
+  "rename-experiment-group",
+  "dissolve-experiment-group",
+]);
+function nasReadOnly() {
+  return !!state.session?.storage?.read_only;
+}
+function applyNASReadOnly() {
+  if (!nasReadOnly()) return;
+  document.querySelectorAll("[data-action]").forEach((control) => {
+    if (nasWriteActions.has(control.dataset.action)) {
+      control.disabled = true;
+      control.title = "NAS 只读查看，请在编辑主机修改";
+    }
+  });
+}
+function nasBanner() {
+  const storage = state.session?.storage;
+  if (!storage) return "";
+  return `<section class="nas-banner" aria-label="NAS 连接状态"><div><strong>${storage.read_only ? "NAS · 只读查看" : "NAS · 当前为编辑主机"}</strong><span class="nas-location">${e(storage.root)}</span><small>${storage.owner?.host ? "编辑主机：" + e(storage.owner.host) : "当前没有编辑主机"} · 资料直接从 NAS 读取</small></div>${button("nas-refresh", "刷新 NAS 资料", "refresh")}</section>`;
+}
+async function openNASLibraries() {
+  const data = await api("nas/libraries");
+  openDialog(
+    "NAS 实验库",
+    `<p class="prose">先在系统中挂载 NAS 共享文件夹，再选择连接方式。一台电脑负责编辑，其他电脑可只读查看同一份资料。</p><div class="nas-library-actions">${button("nas-connect", "连接 NAS 文件夹", "plus", "", true)}${data.home_url && new URL(data.home_url).origin !== location.origin ? `<a class="button" href="${e(data.home_url)}">返回起始实验库</a>` : ""}</div><div class="nas-connections">${data.items.length ? data.items.map((item) => `<article class="nas-connection"><h3>${scientificHTML(item.name)}</h3><p>${e(item.root)}</p><small>${item.available ? "共享目录可访问" : "共享暂不可访问，请先重新挂载"}</small><div class="toolbar-group">${button("nas-open", "只读打开", "folder", `data-id="${e(item.id)}" data-mode="viewer" ${item.available ? "" : "disabled"}`)}${button("nas-open", "作为编辑主机打开", "edit", `data-id="${e(item.id)}" data-mode="writer" ${item.available ? "" : "disabled"}`)}</div></article>`).join("") : '<p class="field-hint">当前电脑还没有保存 NAS 连接。连接记录仅保存在这台电脑。</p>'}</div>`,
+    null,
+    { wide: true, kicker: "系统已挂载的共享目录" },
+  );
+}
+function openNASConnector() {
+  openDialog(
+    "连接 NAS 实验库",
+    `<p class="field-hint">程序运行在本机，实验文件保存在 NAS。这里不保存 NAS 账号或密码；连接和权限由系统管理。</p><div class="form-grid">${field("nas_root", "NAS 挂载目录", "", { required: true, wide: true, hint: "Mac 例如 /Volumes/课题共享/实验库；Windows 粘贴网络驱动器或共享文件夹的完整路径。" })}${field("nas_name", "本机连接名称", "", { wide: true, hint: "例如 材料实验 NAS，留空沿用实验库名称。" })}<div class="form-field wide"><label for="nas-mode">连接方式</label><select id="nas-mode" name="nas_mode"><option value="viewer">只读查看（其他电脑）</option><option value="writer">编辑主机（同一时间一台）</option></select></div><label class="checkbox-label wide"><input type="checkbox" name="nas_initialize">首次建立或将已关闭的原库设为 NAS 实验库</label><p class="field-hint wide">首次建立请选择编辑主机，并确认原程序已关闭；现有实验文件会保留。普通只读连接不会初始化或修改共享目录。</p></div>`,
+    async (form) => {
+      await enterNAS({
+        root: String(form.get("nas_root")).trim(),
+        name: String(form.get("nas_name")).trim(),
+        mode: form.get("nas_mode"),
+        initialize: form.has("nas_initialize"),
+      });
+    },
+    { wide: true, label: "连接并打开", kicker: "NAS" },
+  );
+  state.dialog.freezeOnSubmit = true;
+}
+async function enterNAS(values) {
+  if (state.nasConnecting) throw new Error("正在连接 NAS，请稍候");
+  if (state.uploadXHR)
+    throw new Error("请先完成或停止当前文件发送，再切换实验库");
+  const dialog = state.dialog;
+  state.nasConnecting = true;
+  try {
+    const result = await api("nas/open", {
+      method: "POST",
+      body: JSON.stringify(values),
+    });
+    if (state.dialog !== dialog) {
+      toast("NAS 已连接，可从 NAS 实验库重新打开");
+      return;
+    }
+    closeDialog(true);
+    const target = new URL(result.url);
+    target.searchParams.set("theme", $("theme-select").value);
+    location.assign(target.href);
+  } finally {
+    state.nasConnecting = false;
+  }
+}
 function button(action, label, name = "plus", attrs = "", primary = false) {
-  return `<button type="button" class="button${primary ? " primary" : ""}" data-action="${action}" ${attrs}>${icon(name)}${e(label)}</button>`;
+  return `<button type="button" class="button${primary ? " primary" : ""}" data-action="${action}" ${nasReadOnly() && nasWriteActions.has(action) ? 'disabled title="NAS 只读查看，请在编辑主机修改"' : ""} ${attrs}>${icon(name)}${e(label)}</button>`;
 }
 const parameterPins = new Map();
 function parameterPreferenceKey(expId) {
@@ -668,8 +771,9 @@ async function renderPage() {
     else if (state.view === "files") html = await libraryPage();
     else html = await detailPage();
     if (generation !== state.generation) return;
-    content.innerHTML = html;
+    content.innerHTML = nasBanner() + html;
     hydratePage();
+    applyNASReadOnly();
   } catch (error) {
     if (generation !== state.generation) return;
     content.innerHTML = `<div class="error-panel"><h2>暂时无法读取资料</h2><p>${e(errorText(error))}</p>${button("reload", "重新读取", "refresh")}</div>`;
@@ -874,10 +978,11 @@ function syncStatusHTML(data) {
   const mode =
     {
       folder: "共享目录中转",
+      webdav: "WebDAV · 坚果云 / 其他服务",
       "lan-host": "局域网直连 · 接收电脑",
       "lan-client": "局域网直连 · 连接另一电脑",
     }[settings.mode] || "尚未配置";
-  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>上次成功同步</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验、原始文件、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_videos === false ? "跳过视频" : "包含视频"} · ${settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "照片不限大小"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p><div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", "立即同步", "refresh", !data.configured || !settings.enabled || status.running ? "disabled" : "", true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${settings.mode === "lan-host" ? button("sync-pairing", "显示配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
+  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>上次成功同步</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验、原始文件、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_photos === false ? "跳过照片" : settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "包含照片，不限大小"} · ${settings.include_videos === false ? "跳过视频" : "包含视频"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}${status.retry_at ? `<p class="field-hint">下次云端重试：${e(date(new Date(status.retry_at * 1000).toISOString(), true))}；限流等待期间「立即同步」不会提前发送请求。</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p><div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", "立即同步", "refresh", !data.configured || !settings.enabled || status.running ? "disabled" : "", true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${settings.mode === "lan-host" ? button("sync-pairing", "显示配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
 }
 function syncConflictsHTML(data) {
   const labels = {
@@ -924,7 +1029,7 @@ function syncConnectionHTML(data) {
     paused: "同步已暂停",
   };
   const peers = info.peers || [];
-  return `<header class="panel-header"><h2>连接主机</h2>${icon("link")}</header><div class="panel-body spaced"><div class="sync-host"><span class="badge ${["verified", "listening"].includes(info.state) ? "done" : "planned"}">${e(states[info.state] || "等待检查连接")}</span><h3>${e(info.hostname || (info.mode === "lan-client" ? "远端同步电脑" : "选择同步主机"))}</h3><p class="mono sync-host-address">${e(info.address || "配置同步后显示主机地址或中转目录")}</p><p class="field-hint">本机：${e(info.local_hostname || "—")}${info.last_seen ? `<br>上次连接检查：${e(date(info.last_seen, true))}` : ""}</p></div>${info.mode === "lan-host" ? `<div class="sync-peer-list"><strong>最近通信的电脑</strong>${peers.length ? peers.map((peer) => `<article><div><strong>${e(peer.hostname)}</strong><p class="mono">${e(peer.address)}</p></div><span>${peer.recent ? "最近有通信" : "等待再次通信"}<small>${e(date(peer.last_seen, true))}</small></span></article>`).join("") : '<p class="field-hint">还没有已认证的电脑连接。显示配对信息后，在另一台电脑粘贴连接。</p>'}</div>` : ""}<p class="field-hint">直连按每轮通信检查状态，不是持续在线会话。共享目录模式显示中转路径，不推测另一台电脑是否在线。</p><details class="sync-help"><summary>校园网下如何连接</summary><p class="prose">共享目录：两台电脑选择同一共享盘或网盘同步目录。直连：一台接收连接，另一台粘贴配对信息；两端须互通。校园网隔离时，可使用共享目录中转或允许互通的独立热点。</p></details></div>`;
+  return `<header class="panel-header"><h2>连接主机</h2>${icon("link")}</header><div class="panel-body spaced"><div class="sync-host"><span class="badge ${["verified", "listening"].includes(info.state) ? "done" : "planned"}">${e(states[info.state] || "等待检查连接")}</span><h3>${e(info.hostname || (info.mode === "lan-client" ? "远端同步电脑" : "选择同步主机"))}</h3><p class="mono sync-host-address">${e(info.address || "配置同步后显示主机地址或中转目录")}</p><p class="field-hint">本机：${e(info.local_hostname || "—")}${info.last_seen ? `<br>上次连接检查：${e(date(info.last_seen, true))}` : ""}</p></div>${info.mode === "lan-host" ? `<div class="sync-peer-list"><strong>最近通信的电脑</strong>${peers.length ? peers.map((peer) => `<article><div><strong>${e(peer.hostname)}</strong><p class="mono">${e(peer.address)}</p></div><span>${peer.recent ? "最近有通信" : "等待再次通信"}<small>${e(date(peer.last_seen, true))}</small></span></article>`).join("") : '<p class="field-hint">还没有已认证的电脑连接。显示配对信息后，在另一台电脑粘贴连接。</p>'}</div>` : ""}<p class="field-hint">直连按每轮通信检查状态，不是持续在线会话。共享目录模式显示中转路径，不推测另一台电脑是否在线。</p><details class="sync-help"><summary>校园网下如何连接</summary><p class="prose">WebDAV：两端填写同一坚果云或其他 WebDAV 目录，通过云端交换资料，无需校园网内互通。共享目录：两台电脑选择同一共享盘或网盘同步目录。直连：一台接收连接，另一台粘贴配对信息；两端须互通。校园网隔离时，可使用共享目录中转或允许互通的独立热点。</p></details></div>`;
 }
 function syncProgressHTML(data) {
   const progress = data.progress || { label: "等待同步" };
@@ -982,6 +1087,11 @@ async function downloadSyncLog() {
 }
 async function syncPage() {
   const data = await api("sync");
+  if (data.nas)
+    return (
+      pageHeading("NAS", "直接读取 NAS", data.message) +
+      '<section class="panel"><div class="panel-body"><p class="prose">各终端读取 NAS 上的同一份实验文件，无需复制成独立副本。请先确认系统共享已连接；其他电脑选择只读方式打开。</p></div></section>'
+    );
   state.syncInfo = data;
   return (
     pageHeading(
@@ -996,25 +1106,32 @@ async function syncPage() {
 async function openSyncSettings() {
   const data = await api("sync");
   const settings = data.settings;
-  const mode = settings.mode || "folder";
+  const mode = settings.mode || "webdav";
   const modeOptions = [
+    ["webdav", "WebDAV：坚果云 / 其他服务"],
     ["folder", "共享目录中转"],
     ["lan-host", "局域网直连：本机接收连接"],
     ["lan-client", "局域网直连：连接另一电脑"],
   ];
   openDialog(
     "配置双向自动同步",
-    `<div class="form-grid"><div class="form-field wide"><label for="sync-mode">同步方式</label><select id="sync-mode" name="mode">${modeOptions.map(([key, label]) => `<option value="${key}" ${mode === key ? "selected" : ""}>${label}</option>`).join("")}</select></div><div id="sync-mode-fields" class="wide"></div>${field("sync_interval", "自动检查间隔（秒）", settings.interval || 30, { type: "number" })}${field("sync_photo_limit", "照片大小上限（MB）", settings.photo_limit_mb || 0, { type: "number", hint: "超过此大小的照片跳过传输；0 表示不限，1 MB = 1024² 字节。" })}<label class="checkbox-label wide"><input type="checkbox" name="include_videos" ${settings.include_videos !== false ? "checked" : ""}>同步视频文件</label><p class="field-hint wide">取消勾选可跳过视频。筛选不会删除已有文件。两台电脑可分别设置各自的传输范围。</p></div>`,
+    `<div class="form-grid sync-settings-form"><div class="form-field wide"><label for="sync-mode">同步方式</label><select id="sync-mode" name="mode">${modeOptions.map(([key, label]) => `<option value="${key}" ${mode === key ? "selected" : ""}>${label}</option>`).join("")}</select></div><div id="sync-mode-fields" class="wide"></div>${field("sync_interval", "自动检查间隔（秒）", settings.interval || 30, { type: "number" })}${field("sync_photo_limit", "照片大小上限（MB）", settings.photo_limit_mb || 0, { type: "number", hint: "超过此大小的照片跳过传输；0 表示不限，1 MB = 1024² 字节。" })}<label class="checkbox-label wide"><input type="checkbox" name="include_photos" ${settings.include_photos !== false ? "checked" : ""}>同步照片文件</label><label class="checkbox-label wide"><input type="checkbox" name="include_videos" ${settings.include_videos !== false ? "checked" : ""}>同步视频文件</label><p class="field-hint wide">照片和视频可分别选择。筛选同时作用于上传和下载，不会删除已有文件；关闭照片后，照片大小上限暂不生效。两台电脑分别设置各自的传输范围。</p></div>`,
     async (form) => {
       const values = {
         mode: form.get("mode"),
         interval: Number(form.get("sync_interval")),
         photo_limit_mb: Number(form.get("sync_photo_limit")),
+        include_photos: form.has("include_photos"),
         include_videos: form.has("include_videos"),
       };
       if (values.mode === "folder")
         values.folder = String(form.get("sync_folder") || "").trim();
-      else if (values.mode === "lan-host") {
+      else if (values.mode === "webdav") {
+        values.webdav_url = String(form.get("sync_webdav_url") || "").trim();
+        values.webdav_username = String(form.get("sync_webdav_username") || "").trim();
+        values.webdav_password = String(form.get("sync_webdav_password") || "");
+        values.webdav_folder = String(form.get("sync_webdav_folder") || "").trim();
+      } else if (values.mode === "lan-host") {
         values.host = String(form.get("sync_host") || "").trim();
         values.port = Number(form.get("sync_port"));
       } else {
@@ -1048,6 +1165,8 @@ async function openSyncSettings() {
             wide: true,
             hint: "例如 Windows 的 Z:\\实验同步，Mac 的 /Volumes/共享盘/实验同步；不要选本机实验库内部。",
           })
+        : selected === "webdav"
+          ? `<div class="form-grid sync-webdav-fields">${field("sync_webdav_url", "WebDAV 服务地址", settings.webdav_url || "https://dav.jianguoyun.com/dav/", { type: "url", required: true, wide: true, hint: "坚果云使用上方默认地址；其他 WebDAV 服务须填写 HTTPS 地址。" })}${field("sync_webdav_username", "WebDAV 账号", settings.webdav_username || "", { required: true, hint: "坚果云填写账号邮箱。" })}${field("sync_webdav_password", "第三方应用密码", "", { type: "password", hint: settings.webdav_password_saved ? "已保存；地址和账号相同时留空沿用。更换账号或地址请重新填写。" : "在坚果云「账户信息 → 安全选项 → 第三方应用管理」生成，请勿填写登录密码。" })}${field("sync_webdav_folder", "云端同步目录", settings.webdav_folder || "ExpVault", { required: true, wide: true, hint: "两台电脑填写同一专用目录，例如 ExpVault 或 科研/实验同步；程序在其中保存同步历史。" })}<p class="field-hint wide">无需安装坚果云客户端。应用密码保存在本机，不进入同步资料或日志。坚果云默认每 300 秒检查，保存连接与首次同步可能需要等待。</p></div>`
         : selected === "lan-host"
           ? `<div class="form-grid">${field("sync_host", "本机网卡 IPv4 地址", settings.host || "", { required: true, hint: "填写两台电脑可互通的网卡地址，例如热点地址。" })}${field("sync_port", "直连服务端口", settings.port || 8766, { type: "number", required: true })}</div>`
           : field("sync_pairing", "另一台电脑的配对信息", "", {
@@ -1058,10 +1177,15 @@ async function openSyncSettings() {
                   ? `已连接 ${settings.peer_url}；留空沿用配对信息。`
                   : "先在另一台电脑选择“本机接收连接”，再复制其完整配对信息。",
             });
+    const interval = $("field-sync_interval");
+    interval.min = selected === "webdav" ? 60 : 5;
+    if (selected === "webdav" && Number(interval.value) < 60)
+      interval.value = 300;
+    const password = $("field-sync_webdav_password");
+    if (password) password.autocomplete = "new-password";
   };
   $("sync-mode").addEventListener("change", fields);
   fields();
-  $("field-sync_interval").min = 5;
   $("field-sync_interval").max = 3600;
   $("field-sync_photo_limit").min = 0;
   $("field-sync_photo_limit").step = "any";
@@ -1110,6 +1234,7 @@ async function refreshSync() {
   syncRefreshInFlight = true;
   try {
     const data = await api("sync");
+    if (data.nas) return;
     state.syncInfo = data;
     const count = $("sync-pending-count");
     if (count) {
@@ -1202,7 +1327,10 @@ function updateExperimentSelection() {
   if (count) count.textContent = `已选 ${state.experimentSelection.size} 个`;
   document
     .querySelectorAll("[data-experiment-bulk]")
-    .forEach((button) => (button.disabled = !state.experimentSelection.size));
+    .forEach(
+      (button) =>
+        (button.disabled = nasReadOnly() || !state.experimentSelection.size),
+    );
 }
 function experimentGroupsField(names = []) {
   return field("groups", "实验分组", (names || []).join(", "), {
@@ -1420,8 +1548,8 @@ function updateSelection() {
     $("selected-count").textContent = state.selected.size
       ? `已选择 ${state.selected.size} 个文件`
       : `本页 ${state.files.length} 个文件`;
-  $("file-tag-button").disabled = !state.selected.size;
-  $("file-delete-button").disabled = !state.selected.size;
+  $("file-tag-button").disabled = nasReadOnly() || !state.selected.size;
+  $("file-delete-button").disabled = nasReadOnly() || !state.selected.size;
 }
 
 function openDialog(
@@ -2068,7 +2196,7 @@ async function openExperimentEditor(edit = false) {
 }
 function referencesHTML(items = []) {
   if (!items.length) return "";
-  return `<div class="record-references" aria-label="引用资料">${items.map((item) => `<div class="record-reference ${item.missing ? "missing" : ""}"><span class="type-icon">${kindIcon(item.path)}</span><div class="reference-description"><strong>${e(item.name || item.path)}</strong><small>来源：${scientificHTML(item.experiment_title || item.exp_id)} · ${e(item.exp_id)}</small><small>${e(item.path)}</small><div class="tag-line">${tagHTML(item.current_tags || item.tags)}</div>${item.missing ? '<span class="reference-warning">原文件缺失或不可访问，请核对来源实验。</span>' : item.changed ? '<span class="reference-warning">原文件已更新，请核对当前版本与引用时记录的摘要。</span>' : ""}</div><div class="reference-actions">${item.missing ? "" : `<button class="text-button" type="button" data-action="preview-reference" data-exp="${e(item.exp_id)}" data-path="${e(item.path)}">查看</button><a href="${e(fileURL(item.path, true, item.exp_id))}" download>下载</a>`}</div></div>`).join("")}</div>`;
+  return `<div class="record-references" aria-label="引用资料">${items.map((item) => `<div class="record-reference ${item.missing ? "missing" : ""}"><span class="type-icon">${kindIcon(item.path)}</span><div class="reference-description"><strong>${e(item.name || item.path)}</strong><small>来源：${scientificHTML(item.experiment_title || item.exp_id)} · ${e(item.exp_id)}</small><small>${e(item.path)}</small><div class="tag-line">${tagHTML(item.current_tags || item.tags)}</div>${item.missing ? '<span class="reference-warning">原文件缺失或不可访问，请核对来源实验。</span>' : item.changed ? '<span class="reference-warning">原文件已更新，请核对当前版本与引用时记录的摘要。</span>' : item.checksum_unknown ? '<span class="reference-warning">此终端尚无文件校验基线，可在编辑主机扫描来源实验后再核对。</span>' : ""}</div><div class="reference-actions">${item.missing ? "" : `<button class="text-button" type="button" data-action="preview-reference" data-exp="${e(item.exp_id)}" data-path="${e(item.path)}">查看</button><a href="${e(fileURL(item.path, true, item.exp_id))}" download>下载</a>`}</div></div>`).join("")}</div>`;
 }
 function journalHTML(meta) {
   if (!meta.journal_blocks?.length)
@@ -2883,6 +3011,11 @@ function watchJob(job) {
   return promise;
 }
 async function runAction(operation, args) {
+  if (
+    nasReadOnly() &&
+    !["reports.export", "experiments.verify"].includes(operation)
+  )
+    throw new Error("NAS 当前为只读连接，请在编辑主机修改");
   const requestId = uuid();
   rememberJob(requestId);
   let job;
@@ -2956,6 +3089,7 @@ function showJobResult(job) {
       ["文件已丢失", result.missing],
       ["尚未登记", result.unregistered],
       ["实验元数据异常", result.bad_meta],
+      ["尚无校验基线：请在编辑主机的文件资料中扫描目录", result.unverified],
     ];
     openDialog(
       "实验完整性检查",
@@ -3003,7 +3137,21 @@ document.addEventListener("click", async (event) => {
   event.preventDefault();
   const action = control.dataset.action;
   try {
-    if (action === "reload") await renderPage();
+    if (nasReadOnly() && nasWriteActions.has(action))
+      throw new Error("NAS 当前为只读连接，请在编辑主机修改");
+    if (action === "nas-libraries") await openNASLibraries();
+    else if (action === "nas-connect") openNASConnector();
+    else if (action === "nas-open")
+      await enterNAS({
+        connection_id: control.dataset.id,
+        mode: control.dataset.mode,
+      });
+    else if (action === "nas-refresh") {
+      const updated = await api("nas/refresh", { method: "POST", body: "{}" });
+      state.session.storage = updated.storage;
+      await renderPage();
+      toast("已从 NAS 更新资料");
+    } else if (action === "reload") await renderPage();
     else if (action === "sync-refresh") await refreshSync();
     else if (action === "sync-download-log") await downloadSyncLog();
     else if (action === "sync-configure") await openSyncSettings();
@@ -3065,6 +3213,7 @@ document.addEventListener("click", async (event) => {
         toast("已置顶；浏览器未允许存储，偏好仅在本次页面中有效。", true);
       }
       $("experiment-parameters").innerHTML = parameterPanel(state.meta);
+      applyNASReadOnly();
       [...$("experiment-parameters").querySelectorAll("[data-param]")]
         .find((button) => button.dataset.param === key)
         ?.focus();
@@ -3088,12 +3237,14 @@ document.addEventListener("click", async (event) => {
         panel === "parameters"
           ? parameterPanel(state.meta)
           : measurementPanel(state.meta);
+      applyNASReadOnly();
       container
         .querySelector('[data-action="toggle-detail-panel"]')
         ?.focus({ preventScroll: true });
     } else if (action === "toggle-parameters") {
       state.parametersExpanded = !state.parametersExpanded;
       $("experiment-parameters").innerHTML = parameterPanel(state.meta);
+      applyNASReadOnly();
       $("experiment-parameters")
         .querySelector('[data-action="toggle-parameters"]')
         ?.focus();

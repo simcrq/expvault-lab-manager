@@ -115,6 +115,7 @@ class Ctx:
     cfg: dict
     con: Console = field(default_factory=Console)
     _db: object = None
+    _nas_read_only: bool | None = None
 
     # ---------------- 路径 ----------------
     @property
@@ -127,18 +128,30 @@ class Ctx:
 
     @property
     def report_dir(self) -> Path:
+        from .nas import is_nas, local_dir
+        if is_nas(self):
+            return local_dir(self.root, self.cfg) / "reports"
         return self.root / self.cfg["paths"]["report"]
 
     @property
     def db_path(self) -> Path:
+        from .nas import is_nas, local_dir
+        if is_nas(self):
+            return local_dir(self.root, self.cfg) / "index.sqlite3"
         return self.root / self.cfg["paths"]["db"]
 
     @property
     def log_path(self) -> Path:
+        from .nas import is_nas, local_dir
+        if is_nas(self):
+            return local_dir(self.root, self.cfg) / "events.jsonl"
         return self.root / self.cfg["paths"]["log"]
 
     @property
     def meta_dir(self) -> Path:
+        from .nas import is_nas, local_dir
+        if is_nas(self):
+            return local_dir(self.root, self.cfg) / "state"
         return self.root / ".expvault"
 
     # ---------------- 数据库 ----------------
@@ -148,10 +161,20 @@ class Ctx:
             from .db import Database
 
             self._db = Database(self.db_path)
+            from .nas import is_nas, refresh_index
+            if is_nas(self):
+                try:
+                    refresh_index(self)
+                except BaseException:
+                    self._db.close()
+                    self._db = None
+                    raise
         return self._db
 
     # ---------------- 小工具 ----------------
     def save_cfg(self) -> None:
+        from .nas import require_writer
+        require_writer(self)
         write_json(self.root / CONFIG_NAME, self.cfg)
 
     def rel(self, p: Path) -> str:
@@ -196,10 +219,18 @@ def load(ctx_free_root: Path | None = None) -> Ctx:
             f"在 {root} 找不到 {CONFIG_NAME}。请先运行：python expvault.py init"
         )
     cfg = deep_merge(default_config(root), raw)
+    from .nas import settings, portable_paths
+    inherited=settings(root,cfg)
+    if inherited:
+        cfg["storage"]=dict(inherited)
+        portable_paths(cfg)
     return Ctx(root=root, cfg=cfg)
 
 
 def init_repo(root: Path, operator: str = "", project: str = "") -> Ctx:
+    from .nas import is_known_path, assert_available
+    if is_known_path(root):
+        assert_available(root)
     root = ensure_dir(Path(root).resolve())
     cfg_path = root / CONFIG_NAME
     if cfg_path.exists():
@@ -213,6 +244,11 @@ def init_repo(root: Path, operator: str = "", project: str = "") -> Ctx:
     from .util import now_iso
 
     cfg.setdefault("created_at", now_iso())
+    from .nas import inherit_storage, require_writer
+    inherited = inherit_storage(root)
+    if inherited:
+        cfg["storage"] = dict(inherited)
+    require_writer(Ctx(root=root, cfg=cfg))
     write_json(cfg_path, cfg)
 
     ctx = Ctx(root=root, cfg=cfg)

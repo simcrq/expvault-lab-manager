@@ -42,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
   expvault new "器件A 转移特性测试" -c IV    建一次实验
   expvault enter                        进入工作区，之后只敲短命令：
                                           add / ls / note / scan / backup / exit
+  expvault nas --help                   连接已挂载的 NAS，主机编辑 / 其他电脑只读
   expvault backup                       一键增量备份到所有已启用目标
   expvault doctor                       体检：有没有丢文件、多久没备份
 

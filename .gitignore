@@ -18,13 +18,16 @@
 !/docs/cli.md
 !/docs/groups.md
 !/docs/gui-import.md
+!/docs/nas.md
 !/docs/release.md
 !/docs/screenshots/experiment.png
 !/docs/screenshots/groups.png
 !/docs/screenshots/import.png
+!/docs/screenshots/nas.png
 !/docs/screenshots/overview.png
 !/docs/screenshots/sync.png
 !/docs/screenshots/templates.png
+!/docs/screenshots/webdav.png
 !/docs/sync.md
 !/docs/templates.md
 !/docs/web.md
@@ -41,6 +44,9 @@
 !/ev/issue.py
 !/ev/journal.py
 !/ev/measurements.py
+!/ev/nas.py
+!/ev/nas_cli.py
+!/ev/nas_libraries.py
 !/ev/network.py
 !/ev/phone_import.py
 !/ev/references.py
@@ -53,6 +59,7 @@
 !/ev/sync_activity.py
 !/ev/sync_merge.py
 !/ev/sync_transport.py
+!/ev/sync_webdav.py
 !/ev/templates.py
 !/ev/tui.py
 !/ev/ui.py

@@ -37,6 +37,8 @@ def blocks(text, entries):
 
 
 def update_references(ctx, rec, note_id, files):
+    from .nas import require_writer
+    require_writer(ctx)
     from . import experiment as ex
     folder = ex.exp_dir(ctx, rec)
     path = folder / "04_notes/日志.md"

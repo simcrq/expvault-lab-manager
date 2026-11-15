@@ -198,6 +198,8 @@ def import_items(root, exp_id, items: list[ImportItem], *, role="auto", deduplic
                  cancel=None, progress=None, item_done=None) -> dict:
     """调用线程拥有自己的 SQLite 连接；与 Harness 共用写锁。"""
     ctx = config.load(Path(root))
+    from .nas import require_writer
+    require_writer(ctx)
     results = {"imported": [], "duplicates": [], "errors": [], "cancelled": False}
     total, completed = sum(i.size for i in items), 0
     lock = FileLock(str(ctx.meta_dir / "harness.lock"), timeout=0)
@@ -320,6 +322,8 @@ def set_file_tags(root, exp_id, relative_paths, tags, *, merge=False, expected_r
     """GUI 中对已导入文件追加/修改标签；重建索引仍可恢复。"""
     tags = normalize_tags(tags)
     ctx = config.load(Path(root))
+    from .nas import require_writer
+    require_writer(ctx)
     try:
         with FileLock(str(ctx.meta_dir / "harness.lock"), timeout=0):
             rec = ctx.db.get_experiment(exp_id)

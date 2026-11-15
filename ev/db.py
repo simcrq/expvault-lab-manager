@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 from pathlib import Path
@@ -91,12 +92,13 @@ def _row(r: sqlite3.Row | None) -> dict | None:
 class Database:
     def __init__(self, path: Path):
         self.path = Path(path)
+        self._transaction_depth = 0
         ensure_dir(self.path.parent)
         self.conn = sqlite3.connect(str(self.path), timeout=30)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
         self._migrate()
-        self.conn.commit()
+        self.commit()
 
     def _migrate(self) -> None:
         """旧库补字段（只加列，不动数据；出错就算了）。"""
@@ -117,7 +119,7 @@ class Database:
     # ------------------------------------------------------------------
     def close(self) -> None:
         try:
-            self.conn.commit()
+            self.commit()
             self.conn.close()
         except Exception:
             pass
@@ -174,7 +176,7 @@ class Database:
             + ",".join(f"{f}=excluded.{f}" for f in fields if f != "id"),
             vals,
         )
-        self.conn.commit()
+        self.commit()
 
     def get_experiment(self, exp_id: str) -> dict | None:
         r = self.conn.execute("SELECT * FROM experiments WHERE id=?", (exp_id,)).fetchone()
@@ -276,7 +278,7 @@ class Database:
     def delete_experiment(self, exp_id: str) -> None:
         self.conn.execute("DELETE FROM files WHERE exp_id=?", (exp_id,))
         self.conn.execute("DELETE FROM experiments WHERE id=?", (exp_id,))
-        self.conn.commit()
+        self.commit()
 
     def next_id(self, date_str: str, prefix: str = "E") -> str:
         compact = date_str.replace("-", "")
@@ -322,7 +324,24 @@ class Database:
         )
 
     def commit(self) -> None:
-        self.conn.commit()
+        if not self._transaction_depth:
+            self.conn.commit()
+
+    @contextlib.contextmanager
+    def transaction(self):
+        if self._transaction_depth:
+            raise RuntimeError("Nested index transactions are not supported")
+        self.conn.execute("BEGIN IMMEDIATE")
+        self._transaction_depth += 1
+        try:
+            yield
+        except BaseException:
+            self.conn.rollback()
+            raise
+        else:
+            self.conn.commit()
+        finally:
+            self._transaction_depth -= 1
 
     def get_file(self, exp_id: str, relpath: str) -> dict | None:
         r = self.conn.execute(
@@ -364,7 +383,7 @@ class Database:
                     (exp_id, r["relpath"]),
                 )
                 n += 1
-        self.conn.commit()
+        self.commit()
         return n
 
     def missing_files(self) -> list[dict]:
@@ -385,7 +404,7 @@ class Database:
             "INSERT INTO events (ts, exp_id, action, detail) VALUES (?,?,?,?)",
             (now_iso(), exp_id or "", action, detail or ""),
         )
-        self.conn.commit()
+        self.commit()
 
     def events(self, exp_id: str | None = None, limit: int = 50) -> list[dict]:
         if exp_id:
@@ -417,7 +436,7 @@ class Database:
                 1 if rec.get("ok", True) else 0,
             ),
         )
-        self.conn.commit()
+        self.commit()
 
     def last_backup(self, target: str | None = None) -> dict | None:
         if target:

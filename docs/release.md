@@ -7,7 +7,7 @@
 ```sh
 python tools/build_release.py --ref HEAD --output dist
 # 或从已建立的版本标签重建
-python tools/build_release.py --ref v1.5.1 --output dist/rebuilt
+python tools/build_release.py --ref v1.7.0 --output dist/rebuilt
 ```
 
 输出为 `expvault-lab-manager-<版本>.zip` 和同名 `.zip.sha256`。已有产物不覆盖，请换一个输出目录。

@@ -92,6 +92,8 @@ def _storage_path(folder: Path, relative: str) -> Path:
 def record(ctx: Ctx, rec: dict, *, text: str | None = None, title: str | None = None,
            images: list[str] | None = None, edit: int | None = None,
            clear_images: bool = False, references: list[dict] | None = None) -> dict:
+    from .nas import require_writer
+    require_writer(ctx)
     folder = ex.exp_dir(ctx, rec)
     sources = [Path(p).expanduser().resolve() for p in (images or [])]
     resolved = file_refs.resolve(ctx, rec, references) if references is not None else None
@@ -259,6 +261,8 @@ a{{color:inherit;overflow-wrap:anywhere}}figcaption{{margin-top:8px}}.missing{{c
 
 
 def preview(ctx: Ctx, rec: dict, *, open_browser: bool = False) -> Path:
+    from .nas import require_writer
+    require_writer(ctx)
     folder = ex.exp_dir(ctx, rec)
     with FileLock(folder / ".expvault" / "steps.lock"):
         meta = ex.load_meta(folder)

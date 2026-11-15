@@ -17,4 +17,5 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ev.cli import main  # noqa: E402
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from ev.nas_cli import dispatch
+    raise SystemExit(dispatch(main, sys.argv[1:]))

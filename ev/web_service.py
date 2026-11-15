@@ -14,7 +14,7 @@ from pathlib import Path, PureWindowsPath
 from filelock import FileLock, Timeout
 from jsonschema import Draft202012Validator, FormatChecker
 
-from . import backup, config, experiment as ex, report, steps, references, journal, templates, groups as grouping
+from . import backup, config, experiment as ex, report, steps, references, journal, templates, nas, groups as grouping
 from .file_tags import normalize_tags
 from .importer import ImportItem, file_kind, import_items, set_file_tags
 from .rich_text import search_text
@@ -87,14 +87,19 @@ def inside(path, parent):
 
 
 class WebService:
-    def __init__(self, root):
+    def __init__(self, root, *, nas_mode=None):
         self.root = Path(root).expanduser().resolve()
+        from . import nas
+        self.nas_mode = (nas_mode or ("writer" if nas.writer(self.root) else "viewer")) if nas.is_nas(self.root) else None
+        self.nas_id = nas.settings(self.root)["id"] if self.nas_mode else None
         self.guard = threading.RLock()
         self.active = {}
         self.closed = False
         with self.context() as ctx:
             self.state = ctx.meta_dir / "web"
-            if not inside(self.state, self.root):
+            if self.nas_mode:
+                self.state = self.state / self.nas_mode
+            if not inside(self.state, self.root) and not (self.nas_mode and inside(self.state, nas.local_dir(self.root, ctx.cfg))):
                 raise WebError("网页状态目录越过仓库边界")
             self.state.mkdir(parents=True, exist_ok=True)
             self.jobs_dir = self.state / "jobs"
@@ -115,7 +120,8 @@ class WebService:
             # Initialize WAL/schema before the first parallel dashboard reads in an empty vault.
             with self.context() as ctx:
                 ctx.db
-                grouping.hydrate_index(ctx)
+                if not self.nas_mode:
+                    grouping.hydrate_index(ctx)
         except Exception:
             self.instance_lock.release()
             self.executor.shutdown(wait=False)
@@ -126,11 +132,19 @@ class WebService:
 
         @contextmanager
         def opened():
+            from . import nas
+            if self.nas_mode:
+                try:
+                    nas.assert_available(self.root, self.nas_id)
+                except (ValueError, OSError) as exc:
+                    raise WebError(str(exc), status=409, code="NAS_UNAVAILABLE") from None
             ctx = config.load(self.root)
+            if self.nas_mode:
+                ctx._nas_read_only = self.nas_mode == "viewer"
             ctx.con = Console(quiet=True, color=False)
             try:
                 for path in (self.root / config.CONFIG_NAME, ctx.data_dir, ctx.db_path, ctx.report_dir, ctx.log_path, ctx.meta_dir):
-                    if not inside(path, self.root):
+                    if not inside(path, self.root) and not (self.nas_mode and inside(path, nas.local_dir(self.root, ctx.cfg))):
                         raise WebError("配置的数据、索引、报告和状态目录必须位于本实验库内")
                 for name, _label, _role in ctx.structure():
                     if not name or Path(name).is_absolute() or PureWindowsPath(name).drive or ".." in name.replace("\\", "/").split("/"):
@@ -143,6 +157,24 @@ class WebService:
                 if ctx._db is not None:
                     ctx.db.close()
         return opened()
+
+    def require_write(self):
+        if not self.nas_mode:
+            return
+        if self.nas_mode == "viewer":
+            raise WebError("当前为 NAS 只读连接，请在编辑主机中修改实验", status=403, code="READ_ONLY")
+        from . import nas
+        with self.context() as ctx:
+            nas.require_writer(ctx)
+
+    def refresh_nas(self):
+        if not self.nas_mode:
+            raise WebError("当前不是 NAS 连接")
+        from . import nas
+        with self.context() as ctx:
+            ctx.db
+            result=nas.refresh_index(ctx, force=True)
+            return {**result, "storage":nas.status(ctx)}
 
     def record(self, ctx, exp_id):
         rec = ctx.db.get_experiment(exp_id)
@@ -203,7 +235,8 @@ class WebService:
             if name == "session":
                 return {"project": ctx.cfg.get("project") or "我的实验库", "operator": ctx.cfg.get("operator", ""),
                         "root": str(self.root), "roles": [{"role": role, "label": label, "directory": directory} for directory, label, role in ctx.structure()],
-                        "max_upload_bytes": 20 * 1024**3, "operations": list(SCHEMAS)}
+                        "max_upload_bytes": 20 * 1024**3, "operations": list(SCHEMAS),
+                        "storage": nas.status(ctx)}
             if name == "overview":
                 records = ctx.db.list_experiments(include_archived=True)
                 return {"experiments": len(records), "running": sum(r["status"] == "running" for r in records),
@@ -328,6 +361,8 @@ class WebService:
         return result
 
     def submit(self, request_id, operation, arguments):
+        if operation not in ("reports.export", "experiments.verify"):
+            self.require_write()
         transaction = getattr(self, "sync_root", self.root)/".expvault/sync/transaction.json"
         pending = read_json(transaction, None)
         if transaction.exists() and (not isinstance(pending,dict) or not pending.get("committed")):
@@ -387,6 +422,8 @@ class WebService:
                 job.update(progress=min(99, int(done*100/max(total, 1))), message=message)
                 write_json(path, job)
         try:
+            if job["operation"] not in ("reports.export", "experiments.verify"):
+                self.require_write()
             job.update(status="running", message="正在执行", started_at=now_iso())
             write_json(path, job)
             op = job["operation"]
@@ -412,6 +449,10 @@ class WebService:
                     result = self.execute(ctx, op, arguments, progress=progress) if op in ("experiments.batch","experiments.groups","groups.rename","groups.dissolve") else self.execute(ctx, op, arguments)
                 message=f'已更新 {result["updated"]} 个实验的分组' if op in ("experiments.groups","groups.rename","groups.dissolve") else "操作已完成"
                 job.update(status="succeeded", result=result, message=message)
+            if self.nas_mode == "writer" and job.get("status") in ("succeeded", "partial", "cancelled"):
+                from . import nas
+                with self.context() as ctx:
+                    nas.publish_checksums(ctx)
         except WebError as exc:
             job.update(status="failed", message=str(exc), error={"code": exc.code, "data": exc.data})
         except Timeout:
@@ -437,7 +478,10 @@ class WebService:
         folder = ex.exp_dir(ctx, rec)
         meta = ex.load_meta(folder)
         ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
-        ex.scan_files(ctx, folder, meta)
+        if self.nas_mode:
+            nas.refresh_index(ctx, force=True)
+        else:
+            ex.scan_files(ctx, folder, meta)
         ex.write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False), folder=folder)
         for relative in (ex.META_NAME, "04_notes/日志.md"):
             path = folder / relative
@@ -564,11 +608,13 @@ class WebService:
             return result
         elif operation == "experiments.verify":
             result = ex.verify(ctx, exp_id=rec["id"], rehash=True)
-            return {**result, "healthy": not any(result[key] for key in ("modified", "missing", "unregistered", "bad_meta"))}
+            return {**result, "healthy": not any(result.get(key) for key in ("modified", "missing", "unregistered", "bad_meta", "unverified"))}
         elif operation == "uploads.discard":
             for upload_id in args["upload_ids"]:
                 self.discard_upload(upload_id, rec["id"])
             return {"discarded": len(args["upload_ids"])}
+        elif operation == "experiments.scan" and self.nas_mode:
+            ex.scan_files(ctx, ex.exp_dir(ctx, rec), ex.load_meta(ex.exp_dir(ctx, rec)))
         elif operation != "experiments.scan":
             raise WebError("不支持的操作")
         self.refresh(ctx, rec)
