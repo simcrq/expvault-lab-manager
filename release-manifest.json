@@ -1,15 +1,15 @@
 {
-  "version": "1.7.1",
+  "version": "1.8.1",
   "source_commit": "a2141e6df343ad03389ed5ddc90de874db4fcbea",
   "python": ">=3.10,<3.14",
   "dependencies_bundled": false,
   "initial_experiments": 0,
   "files": {
     "LICENSE": "7852df0218aae8d4817dd0a6ea72ccad360ea6b614163b263fd6674d5e7d12b6",
-    "README.md": "8dc92e0de95f836386918aca3343600e575e6befdb6e2b82bc52f9ed8e94a597",
+    "README.md": "8362a87702e37c5c5fa8f095b74acfcd55e8522eca4687986a4298f6223aedef",
     "SECURITY.md": "f24cdd26720a4ef77d1c224910b7288df9b8af5cefcb5ee6b16f5511579d5503",
     "THIRD_PARTY_NOTICES.md": "34c063cb45d8e3230a8ce7f3ce204a8b70acdc65125a39ad9a762bae35d2fa91",
-    "VERSION": "249182a01164b81a5f7af87e5c5cdbd3344a80a7a66dfca624cecfb1501b2420",
+    "VERSION": "25cec9739d3218e48acc5d8c3d4333e1d624121c5b7ab3bcddc71d0fa0134b83",
     "docs/cli.md": "b2949fda5c3fc229315900f8505c4d60fbe23fdfe084fa73f4a9524a39212d06",
     "docs/groups.md": "1c712f13001ae387ea13dd228b2044034f8a60cce1b9d93021e587c2a3b12f18",
     "docs/gui-import.md": "5708d2f774e36d19d3e4e400a5565e96b982b12afd03659459c1baa11d1d6e7a",
