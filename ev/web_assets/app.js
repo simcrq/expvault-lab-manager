@@ -371,24 +371,54 @@ function navigate(view, expId = "", tab = "summary", replace = false) {
     query({ view, exp_id: expId, tab: tab === "summary" ? undefined : tab });
   history[replace ? "replaceState" : "pushState"](null, "", url);
   closeMenu();
-  renderPage();
+  renderPage({ focusHeading: true });
   window.scrollTo({ top: 0, behavior: "instant" });
 }
 window.addEventListener("popstate", () => {
   routeFromURL();
-  renderPage();
+  closeMenu();
+  renderPage({ focusHeading: true });
 });
-function closeMenu() {
-  $("sidebar").classList.remove("open");
-  $("sidebar-backdrop").hidden = true;
+// The dialog is mobile-only; the same sidebar returns to its desktop landmark.
+const sidebarHome = document.createComment("sidebar home");
+$("sidebar").before(sidebarHome);
+const mobileNavigation = window.matchMedia("(max-width: 700px)");
+function restoreSidebar() {
+  if (sidebarHome.nextSibling !== $("sidebar")) sidebarHome.after($("sidebar"));
   $("menu-button").setAttribute("aria-expanded", "false");
 }
+function closeMenu() {
+  if ($("navigation-drawer").open) $("navigation-drawer").close();
+  restoreSidebar();
+}
 $("menu-button").addEventListener("click", () => {
-  const open = $("sidebar").classList.toggle("open");
-  $("sidebar-backdrop").hidden = !open;
-  $("menu-button").setAttribute("aria-expanded", String(open));
+  if (!mobileNavigation.matches || $("navigation-drawer").open) return;
+  $("navigation-content").append($("sidebar"));
+  $("navigation-drawer").showModal();
+  $("menu-button").setAttribute("aria-expanded", "true");
 });
-$("sidebar-backdrop").addEventListener("click", closeMenu);
+$("menu-close").addEventListener("click", closeMenu);
+$("navigation-drawer").addEventListener("close", () => {
+  if (!$("navigation-drawer").open) restoreSidebar();
+});
+$("navigation-drawer").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  closeMenu();
+});
+$("navigation-drawer").addEventListener("click", (event) => {
+  if (event.target === $("navigation-drawer")) closeMenu();
+});
+mobileNavigation.addEventListener("change", () => {
+  const wasOpen = $("navigation-drawer").open;
+  closeMenu();
+  if (wasOpen && !mobileNavigation.matches)
+    document.querySelector('.nav-item[aria-current="page"]')?.focus();
+});
+document.querySelector(".skip-link").addEventListener("click", (event) => {
+  // Pairing uses the URL fragment, so skip navigation must not change it.
+  event.preventDefault();
+  ($("page-title") || $("content")).focus();
+});
 $("global-search").addEventListener("submit", (event) => {
   event.preventDefault();
   state.listQuery = $("global-query").value.trim();
@@ -733,7 +763,7 @@ function experimentRows(records, selectable = false) {
     .join("");
 }
 function experimentTable(records, selectable = false) {
-  return `<div class="table-wrap"><table class="experiment-table"><thead><tr>${selectable ? '<th class="col-select"><input type="checkbox" id="select-all-experiments" aria-label="选择本页实验"></th>' : ""}<th class="col-experiment">实验 / 样品</th><th class="col-status">状态</th><th class="col-parameters">关键参数</th><th class="col-updated">最近更新</th><th class="col-files">实验资料</th><th class="col-open"><span class="sr-only">打开实验</span></th></tr></thead><tbody>${experimentRows(records, selectable)}</tbody></table></div>`;
+  return `<div class="table-wrap"><table class="experiment-table"><caption class="sr-only">实验项目与关键参数</caption><thead><tr>${selectable ? '<th scope="col" class="col-select"><input type="checkbox" id="select-all-experiments" aria-label="选择本页实验"></th>' : ""}<th scope="col" class="col-experiment">实验 / 样品</th><th scope="col" class="col-status">状态</th><th scope="col" class="col-parameters">关键参数</th><th scope="col" class="col-updated">最近更新</th><th scope="col" class="col-files">实验资料</th><th scope="col" class="col-open"><span class="sr-only">打开实验</span></th></tr></thead><tbody>${experimentRows(records, selectable)}</tbody></table></div>`;
 }
 function activities(items) {
   return `<div class="activity-list">${
@@ -746,14 +776,22 @@ function activities(items) {
       .join("") || '<p class="muted">还没有活动记录</p>'
   }</div>`;
 }
-async function renderPage() {
+async function renderPage({ focusHeading = false } = {}) {
   const generation = ++state.generation;
   const content = $("content");
-  content.innerHTML = '<div class="loading">正在读取实验资料…</div>';
+  $("global-query").value = state.listQuery;
+  content.setAttribute("aria-busy", "true");
+  content.innerHTML =
+    '<div class="loading"><progress aria-label="读取实验资料"></progress><span>正在读取实验资料…</span></div>';
   const active = state.view === "experiment" ? "experiments" : state.view;
   document
     .querySelectorAll(".nav-item")
-    .forEach((el) => el.classList.toggle("active", el.dataset.nav === active));
+    .forEach((el) => {
+      const current = el.dataset.nav === active;
+      el.classList.toggle("active", current);
+      if (current) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    });
   $("breadcrumb-current").textContent = {
     overview: "工作概览",
     experiments: "实验项目",
@@ -774,9 +812,21 @@ async function renderPage() {
     content.innerHTML = nasBanner() + html;
     hydratePage();
     applyNASReadOnly();
+    const heading = content.querySelector("h1");
+    if (heading) {
+      heading.id = "page-title";
+      heading.tabIndex = -1;
+    }
+    document.title = `${heading?.textContent || $("breadcrumb-current").textContent} · expvault`;
+    if (focusHeading && !$("editor").open)
+      heading?.focus({ preventScroll: true });
+    else
+      $("page-status").textContent = `已更新${$("breadcrumb-current").textContent}`;
   } catch (error) {
     if (generation !== state.generation) return;
-    content.innerHTML = `<div class="error-panel"><h2>暂时无法读取资料</h2><p>${e(errorText(error))}</p>${button("reload", "重新读取", "refresh")}</div>`;
+    content.innerHTML = `<div class="error-panel" role="alert"><h2>暂时无法读取资料</h2><p>${e(errorText(error))}</p>${button("reload", "重新读取", "refresh")}</div>`;
+  } finally {
+    if (generation === state.generation) content.setAttribute("aria-busy", "false");
   }
 }
 async function overviewPage() {
@@ -793,26 +843,29 @@ async function overviewPage() {
   }
   $("nav-count").textContent = data.experiments;
   const cards = [
-    ["实验总数", data.experiments, "当前实验库的全部记录", "flask"],
-    ["进行中", data.running, "打开实验，继续记录", "activity"],
-    ["已完成", data.done, "实验结果与过程可追溯", "check"],
+    ["实验总数", data.experiments, "当前实验库的全部记录", "flask", "all"],
+    ["进行中", data.running, "打开实验，继续记录", "activity", "running"],
+    ["已完成", data.done, "实验结果与过程可追溯", "check", "done"],
     [
       "实验资料",
       data.files,
       `${size(data.bytes)} · 原始文件保存在本地`,
       "folder",
+      "files",
     ],
   ];
   return (
+    '<section class="overview-welcome">' +
     pageHeading(
       "LAB WORKSPACE",
       "实验工作台",
       "查看样品、关键条件和最新记录，继续你的实验。",
       button("new-experiment", "新建实验", "plus", "", true),
     ) +
-    `<div class="stats-grid">${cards.map(([label, value, foot, name]) => `<div class="stat-card"><span class="stat-icon">${icon(name)}</span><div class="stat-label">${label}</div><div class="stat-value">${e(value)}</div><div class="stat-foot">${e(foot)}</div></div>`).join("")}</div>
+    `<div class="overview-context"><span>${icon("folder")}${scientificHTML(state.session.workspace?.name || state.session.project)}</span><span>${icon("shield")}原始文件保留 · 校验可追溯</span></div></section>` +
+    `<div class="stats-grid">${cards.map(([label, value, foot, name, filter]) => `<button type="button" class="stat-card" data-action="overview-filter" data-filter="${filter}" aria-label="查看${label}"><span class="stat-icon">${icon(name)}</span><span class="stat-label">${label}</span><span class="stat-value">${e(value)}</span><span class="stat-foot">${e(foot)}${icon("arrow")}</span></button>`).join("")}</div>
     <section class="active-section" aria-label="进行中的实验"><header class="section-heading"><div><h2>进行中的实验 <span class="section-count">${active.total}</span></h2><p>样品与关键参数速览，可直接修改状态。</p></div><button class="text-button" data-action="show-running">查看全部 ${icon("arrow")}</button></header>
-    ${active.items.length ? `<div class="active-grid">${active.items.map((record) => `<article class="active-experiment" data-exp-id="${e(record.id)}"><h3><button class="text-button" data-action="open-experiment" data-id="${e(record.id)}" title="${e(record.title)}">${scientificHTML(record.title)}</button></h3><div class="active-card-meta"><span title="${e(record.device)}">样品 ${scientificHTML(record.device || "未填写")}</span></div><div class="active-card-parameters">${compactParameters(record, 2)}</div><footer><span>${e(record.operator || "未填写操作人")} · ${e(date(record.date))}</span>${statusButton(record)}</footer></article>`).join("")}</div><footer class="active-pagination"><span>共 ${active.total} 个 · 第 ${state.activePage + 1} / ${Math.ceil(active.total / 12)} 页 · 每页 12 个</span>${active.total > 12 ? `<div class="toolbar-group"><button class="button small" data-action="active-previous" ${state.activePage === 0 ? "disabled" : ""}>上一页</button><button class="button small" data-action="active-next" ${!active.has_more ? "disabled" : ""}>下一页</button></div>` : ""}</footer>` : `<div class="panel">${empty("当前没有进行中的实验", "可以从实验项目继续已有记录，或新建一项实验。", button("new-experiment", "新建实验", "plus"))}</div>`}</section>
+    ${active.items.length ? `<div class="active-grid">${active.items.map((record) => `<article class="active-experiment" data-exp-id="${e(record.id)}"><div class="active-card-meta"><span title="${e(record.device)}">${icon("flask")}样品 ${scientificHTML(record.device || "未填写")}</span><span class="running-indicator" aria-hidden="true"></span></div><h3><button class="text-button" data-action="open-experiment" data-id="${e(record.id)}" title="${e(record.title)}">${scientificHTML(record.title)}</button></h3><div class="active-card-parameters">${compactParameters(record, 2)}</div><footer><span>${e(record.operator || "未填写操作人")} · ${e(date(record.date))}</span>${statusButton(record)}</footer></article>`).join("")}</div><footer class="active-pagination"><span>共 ${active.total} 个 · 第 ${state.activePage + 1} / ${Math.ceil(active.total / 12)} 页 · 每页 12 个</span>${active.total > 12 ? `<div class="toolbar-group"><button class="button small" data-action="active-previous" ${state.activePage === 0 ? "disabled" : ""}>上一页</button><button class="button small" data-action="active-next" ${!active.has_more ? "disabled" : ""}>下一页</button></div>` : ""}</footer>` : `<div class="panel">${empty("当前没有进行中的实验", "可以从实验项目继续已有记录，或新建一项实验。", button("new-experiment", "新建实验", "plus"))}</div>`}</section>
     <div class="dashboard-grid"><section class="panel"><header class="panel-header"><h2>最近的实验</h2><a class="text-button" href="/?view=experiments" data-nav="experiments">查看全部 ${icon("arrow")}</a></header>${data.recent.length ? experimentTable(data.recent) : empty("还没有实验记录", "新建实验后，即可填写参数、记录过程并整理资料。")}</section><section class="panel"><header class="panel-header"><h2>最近记录</h2>${icon("clock")}</header>${activities(data.events)}</section></div>`
   );
 }
@@ -889,14 +942,16 @@ async function detailPage() {
   ]
     .map(
       ([key, label]) =>
-        `<button class="tab ${state.tab === key ? "active" : ""}" role="tab" aria-selected="${state.tab === key}" data-action="detail-tab" data-tab="${key}">${e(label)}</button>`,
+        `<button id="detail-tab-${key}" class="tab ${state.tab === key ? "active" : ""}" role="tab" aria-selected="${state.tab === key}" aria-controls="detail-panel" tabindex="${state.tab === key ? 0 : -1}" data-action="detail-tab" data-tab="${key}">${e(label)}</button>`,
     )
     .join("")}</div>`;
-  if (state.tab === "files") return html + (await filesSection());
-  if (state.tab === "steps") return html + stepsSection(meta);
+  const tabPanel = (body) =>
+    html +
+    `<div id="detail-panel" role="tabpanel" aria-labelledby="detail-tab-${state.tab}" tabindex="0">${body}</div>`;
+  if (state.tab === "files") return tabPanel(await filesSection());
+  if (state.tab === "steps") return tabPanel(stepsSection(meta));
   if (state.tab === "history")
-    return (
-      html +
+    return tabPanel(
       `<section class="panel"><header class="panel-header"><h2>实验变更记录</h2><span class="muted">最近 100 条</span></header><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>内容</th></tr></thead><tbody>${
         [...(meta.history || [])]
           .reverse()
@@ -913,8 +968,7 @@ async function detailPage() {
   const latestNote = (meta.journal_blocks || [])
     .filter((entry) => entry.kind === "entry")
     .at(-1);
-  return (
-    html +
+  return tabPanel(
     `<div class="detail-grid"><div class="section-stack">
     <section class="panel findings-panel"><header class="panel-header"><h2>实验结果与下一步</h2>${icon("activity")}</header><div class="findings-grid"><div><h3>结果与观察</h3><p class="prose ${meta.results ? "" : "empty"}">${scientificHTML(meta.results || "尚未记录结果，实验过程中可随时补充。")}</p></div><div><h3>结论与下一步</h3><p class="prose ${meta.conclusion ? "" : "empty"}">${scientificHTML(meta.conclusion || "尚未填写结论与后续计划。")}</p></div></div></section>
     <div class="context-grid">${prose("实验目的", "purpose", "target")}${prose("测试条件", "conditions", "flask")}</div>
@@ -1431,6 +1485,22 @@ async function renameExperimentGroup(name) {
   state.dialog.freezeOnSubmit = true;
 }
 function hydratePage() {
+  document.querySelector('[role="tablist"]')?.addEventListener("keydown", (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
+    const index = tabs.indexOf(event.target);
+    if (index < 0) return;
+    const next = {
+      ArrowRight: (index + 1) % tabs.length,
+      ArrowLeft: (index - 1 + tabs.length) % tabs.length,
+      Home: 0,
+      End: tabs.length - 1,
+    }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    tabs.forEach((tab, position) => (tab.tabIndex = position === next ? 0 : -1));
+    tabs[next].focus();
+  });
   const bindSearch = (id, update) => {
     const field = $(id);
     if (field)
@@ -1558,6 +1628,7 @@ function openDialog(
   submit,
   { wide = false, kicker = "实验管理", label = "保存" } = {},
 ) {
+  closeMenu();
   state.dialog?.cleanup?.();
   if ($("editor").open) $("editor").close();
   state.dialog = { submit, dirty: false };
@@ -3178,11 +3249,16 @@ document.addEventListener("click", async (event) => {
     else if (action === "new-workspace") openWorkspaceCreator();
     else if (action === "select-workspace")
       await enterWorkspace(control.dataset.id);
-    else if (action === "show-running") {
-      state.status = "running";
+    else if (action === "overview-filter" && control.dataset.filter === "files")
+      navigate("files");
+    else if (action === "show-running" || action === "overview-filter") {
+      const filter = action === "show-running" ? "running" : control.dataset.filter;
+      state.status = filter === "all" ? "" : filter;
       state.listQuery = "";
-      state.archived = false;
+      state.groupFilter = "";
+      state.archived = filter === "all";
       state.page = 0;
+      clearExperimentSelection();
       navigate("experiments");
     } else if (action === "active-previous" || action === "active-next") {
       state.activePage += action === "active-next" ? 1 : -1;
@@ -3327,6 +3403,7 @@ document.addEventListener("click", async (event) => {
           query({ view: "experiment", exp_id: state.expId, tab: state.tab }),
       );
       await renderPage();
+      $("detail-tab-" + state.tab)?.focus({ preventScroll: true });
     } else if (action === "previous-page") {
       state.page--;
       await renderPage();

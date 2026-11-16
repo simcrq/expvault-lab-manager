@@ -33,6 +33,7 @@
       </div>
     </div>
     <div id="app" class="app-shell" hidden>
+      <a class="skip-link" href="#page-title">跳到主要内容</a>
       <aside id="sidebar" class="sidebar">
         <a class="wordmark" href="/?view=overview" data-nav="overview"
           ><span class="logo-mark">e</span> expvault<span class="wordmark-dot"
@@ -107,7 +108,7 @@
               id="menu-button"
               class="icon-button menu-button"
               aria-label="展开导航"
-              aria-controls="sidebar"
+              aria-controls="navigation-drawer"
               aria-expanded="false"
             >
               <span data-icon="menu"></span></button
@@ -117,7 +118,7 @@
             >
           </div>
           <div class="topbar-actions">
-            <form id="global-search" class="global-search">
+            <form id="global-search" class="global-search" role="search">
               <span data-icon="search"></span
               ><input
                 id="global-query"
@@ -155,14 +156,30 @@
             ><span id="operator-avatar" class="operator-avatar">我</span>
           </div>
         </header>
-        <main id="content" tabindex="-1" aria-live="polite"></main>
+        <main id="content" tabindex="-1" aria-busy="false"></main>
+        <p id="page-status" class="sr-only" role="status" aria-atomic="true"></p>
         <footer class="main-footer">
           <span>expvault · 留住过程，连接发现</span
           ><span>本地存储 / 原始文件保留 / SHA256 校验</span>
         </footer>
       </div>
     </div>
-    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+    <dialog
+      id="navigation-drawer"
+      class="navigation-drawer"
+      aria-label="工作空间导航"
+    >
+      <button
+        id="menu-close"
+        class="icon-button drawer-close"
+        type="button"
+        aria-label="关闭导航"
+        autofocus
+      >
+        <span data-icon="close"></span>
+      </button>
+      <div id="navigation-content" class="navigation-content"></div>
+    </dialog>
     <dialog id="editor" class="editor-dialog" aria-labelledby="dialog-title">
       <form id="dialog-form">
         <header class="dialog-header">
