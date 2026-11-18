@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from filelock import FileLock
@@ -123,6 +124,20 @@ class LibrarySessions:
                     finally:access.__exit__(None,None,None)
                 raise
             return {"url":server.url,"connection":item}
+
+    def open_restored(self, folder, source_root):
+        from .web import WebServer
+        from .web_backups import prepare_library
+
+        key = (str(folder), "restored")
+        with self.lock:
+            if self.closed:
+                raise ValueError("主窗口已关闭，请重新启动")
+            if key not in self.sessions:
+                prepare_library(folder, source_root)
+                server = WebServer(folder, host="127.0.0.1", port=0, libraries=self).start()
+                self.sessions[key] = (server, nullcontext())
+            return {"url": self.sessions[key][0].url}
 
     def close(self):
         with self.lock:

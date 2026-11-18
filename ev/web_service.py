@@ -14,7 +14,7 @@ from pathlib import Path, PureWindowsPath
 from filelock import FileLock, Timeout
 from jsonschema import Draft202012Validator, FormatChecker
 
-from . import backup, config, experiment as ex, report, steps, references, journal, templates, nas, groups as grouping
+from . import backup, config, experiment as ex, report, steps, references, journal, templates, nas, web_backups, groups as grouping
 from .file_tags import normalize_tags
 from .importer import ImportItem, file_kind, import_items, set_file_tags
 from .rich_text import search_text
@@ -46,6 +46,9 @@ FIELDS.update(measurement_groups=GROUPS_SCHEMA, title={**SHORT, "minLength": 1, 
               params={"type": "object", "maxProperties": 200, "propertyNames": {"minLength": 1, "maxLength": 128},
                       "additionalProperties": {"type": ["string", "number", "boolean", "null"], "maxLength": 2000}})
 EXPERIMENT = {"exp_id": ID}
+BACKUP_PATH = {"type": "string", "minLength": 1, "maxLength": 4096}
+BACKUP_RESTORE = {"target": SHORT, "directory": BACKUP_PATH, "snapshot": ID, "contains": {**SHORT, "maxLength": 4096},
+                  "destination": BACKUP_PATH}
 REVISION = {"expected_revision": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
 REFERENCES = {"type":"array", "maxItems":100, "uniqueItems":True,
               "items":obj({"exp_id":ID, "path":{**SHORT, "maxLength":4096, "minLength":1}}, ["exp_id", "path"])}
@@ -75,6 +78,7 @@ SCHEMAS = {
     "experiments.scan": obj(EXPERIMENT, ["exp_id"]),
     "experiments.verify": obj(EXPERIMENT, ["exp_id"]),
     "backup.create": obj({"target": {**SHORT, "minLength": 1}}, ["target"]),
+    "backup.restore": obj(BACKUP_RESTORE, ["snapshot", "destination"]),
     "reports.export": obj({"format": {"enum": ["html", "xlsx"]}}, ["format"]),
     "uploads.discard": obj({**EXPERIMENT, "upload_ids": {**UPLOADS, "minItems": 1}}, ["exp_id", "upload_ids"]),
 }
@@ -89,6 +93,7 @@ def inside(path, parent):
 class WebService:
     def __init__(self, root, *, nas_mode=None):
         self.root = Path(root).expanduser().resolve()
+        self.sync_root = self.root
         from . import nas
         self.nas_mode = (nas_mode or ("writer" if nas.writer(self.root) else "viewer")) if nas.is_nas(self.root) else None
         self.nas_id = nas.settings(self.root)["id"] if self.nas_mode else None
@@ -297,9 +302,71 @@ class WebService:
                 for target in ctx.cfg["backup"].get("targets", []):
                     path = ctx.resolve_target_path(target)
                     targets.append({"name": target["name"], "path": str(path), "enabled": bool(target.get("enabled", True)),
-                                    "available": backup.path_available(path)})
+                                    "available": backup.path_available(path),
+                                    "has_snapshots": (path / backup.TARGET_MARK).is_file() and (path / backup.SNAP_DIR).is_dir()})
                 return {"targets": targets, "history": ctx.db.backups(limit=100)}
         raise WebError("接口不存在", status=404)
+
+    def backup_source(self, values):
+        target, directory = values.get("target", ""), values.get("directory", "")
+        if bool(target) == bool(directory):
+            raise WebError("请选择一个备份目标，或填写已有备份目录")
+        if directory:
+            path = Path(directory).expanduser()
+            if not path.is_absolute():
+                raise WebError("请输入备份目录的绝对路径")
+        else:
+            with self.context() as ctx:
+                item = ctx.target_by_name(target)
+                if not item:
+                    raise WebError("备份目标不存在")
+                path = ctx.resolve_target_path(item)
+        return web_backups.target_directory(path)
+
+    def backup_snapshots(self, values):
+        target = self.backup_source(values)
+        latest_path = target / backup.LATEST
+        latest = read_json(latest_path, {}) if latest_path.is_file() and not latest_path.is_symlink() else {}
+        return {"directory": str(target), "items": web_backups.snapshots(target),
+                "latest": latest.get("snapshot") if isinstance(latest, dict) else None}
+
+    def backup_files(self, values):
+        target = self.backup_source(values)
+        identity = values.get("snapshot", "")
+        _manifest, entries = web_backups.snapshot_files(target, identity, values.get("contains", ""))
+        offset = self.integer(values.get("offset", 0), 0, 10000000)
+        limit = self.integer(values.get("limit", 100), 1, 200)
+        return {"items": entries[offset:offset+limit], "total": len(entries),
+                "bytes": sum(item["size"] for item in entries), "has_more": offset + limit < len(entries),
+                "suggested_destination": str(self.root.parent / ("恢复-" + identity))}
+
+    def backup_download(self, values):
+        target = self.backup_source(values)
+        _manifest, entries = web_backups.snapshot_files(target, values.get("snapshot", ""))
+        entry = next((item for item in entries if item["path"] == values.get("path")), None)
+        source = web_backups.object_file(target, entry) if entry else None
+        if source is None:
+            raise WebError("快照中的文件不存在或不完整", status=404)
+        return source, Path(entry["path"]).name
+
+    def backup_restore_preview(self, values):
+        self.validate("backup.restore", values)
+        return web_backups.restore_preview(self.backup_source(values), values["snapshot"], values.get("contains", ""),
+                                           values["destination"], self.sync_root)
+
+    def restored_backup(self, request_id):
+        job = self.job(request_id)
+        result = job.get("result") or {}
+        if job["operation"] != "backup.restore" or job["status"] != "succeeded" or not result.get("can_open"):
+            raise WebError("请选择已完成的完整恢复任务")
+        folder = Path(result["destination"])
+        marker = folder / ".expvault/restore.json"
+        if (folder.resolve() != folder or not folder.is_dir() or marker.is_symlink() or marker.parent.is_symlink()
+                or not marker.resolve().is_relative_to(folder)):
+            raise WebError("恢复目录不可用，请检查目录是否移动")
+        if not marker.is_file() or read_json(marker, None) != {"job_id": request_id}:
+            raise WebError("恢复目录已变化，请核对恢复结果")
+        return folder, result["source_root"]
 
     @staticmethod
     def integer(value, minimum, maximum):
@@ -371,11 +438,11 @@ class WebService:
             nas.publish_checksums(ctx)
 
     def submit(self, request_id, operation, arguments):
-        if operation not in ("reports.export", "experiments.verify"):
+        if operation not in ("reports.export", "experiments.verify", "backup.restore"):
             self.require_write()
         transaction = getattr(self, "sync_root", self.root)/".expvault/sync/transaction.json"
         pending = read_json(transaction, None)
-        if transaction.exists() and (not isinstance(pending,dict) or not pending.get("committed")):
+        if operation != "backup.restore" and transaction.exists() and (not isinstance(pending,dict) or not pending.get("committed")):
             raise WebError("同步正在提交或恢复记录，请稍后再保存", status=409, code="BUSY")
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", request_id):
             raise WebError("操作编号无效")
@@ -391,7 +458,7 @@ class WebService:
                     raise WebError("操作编号已用于其他内容，请刷新后重试", status=409, code="CONFLICT")
                 return self.job(request_id)
             job = {"id": request_id, "operation": operation, "digest": digest, "status": "queued", "progress": 0,
-                   "message": "等待执行", "created_at": now_iso(), "can_cancel": operation == "files.import", "exp_id": arguments.get("exp_id", "")}
+                   "message": "等待执行", "created_at": now_iso(), "can_cancel": operation in ("files.import", "backup.restore"), "exp_id": arguments.get("exp_id", "")}
             write_json(path, job)
             cancel = threading.Event()
             self.active[request_id] = cancel
@@ -432,12 +499,22 @@ class WebService:
                 job.update(progress=min(99, int(done*100/max(total, 1))), message=message)
                 write_json(path, job)
         try:
-            if job["operation"] not in ("reports.export", "experiments.verify"):
+            if job["operation"] not in ("reports.export", "experiments.verify", "backup.restore"):
                 self.require_write()
             job.update(status="running", message="正在执行", started_at=now_iso())
             write_json(path, job)
             op = job["operation"]
-            if op == "files.import":
+            if op == "backup.restore":
+                try:
+                    result = web_backups.restore(self.backup_source(arguments), arguments["snapshot"],
+                                                 arguments.get("contains", ""), arguments["destination"],
+                                                 self.sync_root, job_id=job["id"], progress=progress, cancel=cancel)
+                except InterruptedError:
+                    job.update(status="cancelled", message="已取消恢复", result={"cancelled": True})
+                else:
+                    job.update(status="succeeded", message=f'已恢复 {result["files"]} 个文件',
+                               result={**result, "job_id": job["id"]})
+            elif op == "files.import":
                 items = []
                 for upload_id in arguments["upload_ids"]:
                     value, source = self.upload_manifest(upload_id, arguments["exp_id"])
@@ -459,7 +536,7 @@ class WebService:
                     result = self.execute(ctx, op, arguments, progress=progress) if op in ("experiments.batch","experiments.groups","groups.rename","groups.dissolve") else self.execute(ctx, op, arguments)
                 message=f'已更新 {result["updated"]} 个实验的分组' if op in ("experiments.groups","groups.rename","groups.dissolve") else "操作已完成"
                 job.update(status="succeeded", result=result, message=message)
-            if self.nas_mode == "writer" and job.get("status") in ("succeeded", "partial", "cancelled"):
+            if op != "backup.restore" and self.nas_mode == "writer" and job.get("status") in ("succeeded", "partial", "cancelled"):
                 from . import nas
                 with self.context() as ctx:
                     nas.publish_checksums(ctx)

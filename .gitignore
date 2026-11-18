@@ -70,6 +70,7 @@
 !/ev/ui.py
 !/ev/util.py
 !/ev/web.py
+!/ev/web_backups.py
 !/ev/web_assets/app.js
 !/ev/web_assets/favicon.svg
 !/ev/web_assets/index.html

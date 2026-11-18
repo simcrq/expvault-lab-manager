@@ -207,7 +207,8 @@ class WebServer:
                     raise WebError("文件或请求超过接收上限", status=413)
                 return size
 
-            def serve_file(self, path, *, download=False):
+            def serve_file(self, path, *, download=False, name=None):
+                name = name or path.name
                 with path.open("rb") as stream:
                     size = os.fstat(stream.fileno()).st_size
                     start, end, partial = byte_range(self.headers.get("Range", ""), size)
@@ -216,9 +217,9 @@ class WebServer:
                     self.headers_common()
                     self.send_header("Content-Length", str(length))
                     self.send_header("Accept-Ranges", "bytes")
-                    self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+                    self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")
                     inline = not download and path.suffix.lower() in SAFE_INLINE
-                    self.send_header("Content-Disposition", ("inline" if inline else "attachment") + "; filename*=UTF-8''" + quote(path.name, safe=""))
+                    self.send_header("Content-Disposition", ("inline" if inline else "attachment") + "; filename*=UTF-8''" + quote(name, safe=""))
                     if partial:
                         self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                     self.end_headers()
@@ -263,6 +264,15 @@ class WebServer:
                     self.serve_file(path, download=query.get("download") == "1")
                 elif url.path == "/api/report":
                     self.serve_file(owner.service.export_path(query.get("id", "")), download=True)
+                elif url.path in ("/api/backup/snapshots", "/api/backup/files", "/api/backup/file"):
+                    if not self.local_controls():
+                        raise WebError("请在本机浏览器读取备份", status=403)
+                    if url.path.endswith("/file"):
+                        path, name = self.workspace_action(lambda: owner.service.backup_download(query))
+                        self.serve_file(path, download=True, name=name)
+                    else:
+                        read = owner.service.backup_snapshots if url.path.endswith("/snapshots") else owner.service.backup_files
+                        self.respond(200, self.workspace_action(lambda: read(query)))
                 elif url.path.startswith("/api/jobs/"):
                     self.respond(200, owner.service.job(url.path.removeprefix("/api/jobs/")))
                 elif url.path == "/api/jobs":
@@ -358,8 +368,20 @@ class WebServer:
                     self.respond(200, self.workspace_action(owner.service.refresh_nas))
                 elif url.path == "/api/session":
                     session = owner.service.read("session", {})
+                    session["local_controls"] = self.local_controls()
                     session["workspace"] = self.workspace_action(lambda: owner.hub.registry.get(owner.workspace_id))
                     self.respond(200, session, cookie=True)
+                elif url.path in ("/api/backup/preview", "/api/backup/open"):
+                    if not self.local_controls():
+                        raise WebError("请在本机浏览器恢复或打开备份", status=403)
+                    if url.path.endswith("/preview"):
+                        result = self.workspace_action(lambda: owner.service.backup_restore_preview(value))
+                    else:
+                        if set(value) != {"id"} or not isinstance(value["id"], str):
+                            raise WebError("请选择已完成的恢复任务")
+                        folder, source_root = owner.service.restored_backup(value["id"])
+                        result = self.workspace_action(lambda: owner.libraries.open_restored(folder, source_root))
+                    self.respond(200, result)
                 elif url.path == "/api/workspaces":
                     owner.service.require_write()
                     if not {"name"} <= set(value) <= {"name", "operator", "project"}:
@@ -399,6 +421,8 @@ class WebServer:
                 elif url.path == "/api/actions":
                     if set(value) != {"request_id", "operation", "arguments"}:
                         raise WebError("请求字段无效")
+                    if value["operation"] == "backup.restore" and not self.local_controls():
+                        raise WebError("请在本机浏览器恢复备份", status=403)
                     self.respond(202, owner.service.submit(value["request_id"], value["operation"], value["arguments"]))
                 elif url.path.startswith("/api/jobs/") and url.path.endswith("/cancel"):
                     self.respond(200, owner.service.cancel(url.path[10:-7]))

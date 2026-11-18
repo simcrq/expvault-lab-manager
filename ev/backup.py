@@ -96,8 +96,10 @@ def list_snapshots(target: Path) -> list[dict]:
         return []
     out = []
     for p in sorted(d.glob("*.json")):
+        if p.is_symlink() or not p.is_file():
+            continue
         m = read_json(p, None)
-        if m:
+        if isinstance(m, dict) and isinstance(m.get("id"), str):
             m["_file"] = p.name
             out.append(m)
     out.sort(key=lambda x: x.get("id", ""), reverse=True)
@@ -112,7 +114,7 @@ def get_snapshot(target: Path, snap_id: str) -> dict:
         raise ValueError("目标盘上还没有任何快照")
     p = target / SNAP_DIR / f"{snap_id}.json"
     m = read_json(p, None)
-    if m is None:
+    if not isinstance(m, dict):
         raise ValueError(f"找不到快照：{snap_id}")
     m["_file"] = p.name
     return m

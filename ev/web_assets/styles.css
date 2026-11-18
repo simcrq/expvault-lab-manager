@@ -2159,6 +2159,9 @@ input[type="radio"] {
   overflow: auto;
   font-size: 13px;
 }
+.backup-path {
+  overflow-wrap: anywhere;
+}
 .backup-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

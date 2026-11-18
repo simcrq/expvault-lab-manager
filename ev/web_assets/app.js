@@ -185,6 +185,7 @@ const operationNames = {
   "experiments.scan": "扫描文件",
   "experiments.verify": "校验实验",
   "backup.create": "创建备份",
+  "backup.restore": "恢复备份",
   "reports.export": "导出台账",
   "uploads.discard": "清理暂存",
 };
@@ -1495,9 +1496,143 @@ async function backupsPage() {
       "为实验数据，多留一份保障。",
       "创建增量快照，检查原始文件是否完整，并导出实验台账。",
       button("export-html", "导出 HTML 看板", "export") +
-        button("export-xlsx", "导出台账", "download"),
+        button("export-xlsx", "导出台账", "download") +
+        (state.session.local_controls ? button("backup-directory", "打开备份目录", "folder") : ""),
     ) +
-    `<div class="alert">${icon("info")}备份只使用已配置的目标，不会自动删除旧快照。移动硬盘未连接时，请先接入设备。</div><div class="backup-grid">${data.targets.map((target) => `<article class="backup-target"><h3>${icon("shield")}${e(target.name)}</h3><p>${e(target.path)}</p><div class="target-footer"><span class="badge ${target.enabled && target.available ? "done" : "planned"}">${!target.enabled ? "未启用" : target.available ? "可用" : "未连接"}</span><button class="button small primary" data-action="backup" data-target="${e(target.name)}" ${!target.enabled || !target.available ? "disabled" : ""}>${icon("plus")}创建备份</button></div></article>`).join("") || '<section class="panel">' + empty("还没有配置备份目标", "在实验库 config.json 中设置 backup.targets 后，可在此创建快照。") + "</section>"}</div><section class="panel"><header class="panel-header"><h2>实验完整性检查</h2>${icon("shield")}</header><div class="panel-body"><p class="prose">逐文件重新计算 SHA256，检查文件改动、丢失和未登记资料。</p><div class="choice-card"><select id="verify-experiment" aria-label="选择待校验实验">${records.items.map((r) => `<option value="${e(r.id)}">${e(r.id + " · " + r.title)}</option>`).join("")}</select><button class="button primary" data-action="verify-selected" ${!records.items.length ? "disabled" : ""}>开始校验</button></div></div></section><section class="panel backup-history"><header class="panel-header"><h2>最近的备份</h2><span class="muted">最多 100 条记录</span></header>${data.history.length ? `<div class="table-wrap"><table><thead><tr><th>创建时间</th><th>备份目标</th><th>快照编号</th><th>文件 / 数据量</th><th>结果</th></tr></thead><tbody>${data.history.map((item) => `<tr><td>${e(date(item.ts, true))}</td><td>${e(item.target)}</td><td class="mono">${e(item.snapshot)}</td><td>${item.files || 0} 个<span class="cell-subtitle">${size(item.bytes_total)}</span></td><td><span class="badge ${item.ok ? "done" : "aborted"}">${item.ok ? "已完成" : "部分失败"}</span></td></tr>`).join("")}</tbody></table></div>` : empty("给实验库创建第一份备份", "选择上方可用目标，保存当前数据的快照。")}</section>`
+    `<div class="alert">${icon("info")}备份只使用已配置的目标，不会自动删除旧快照。移动硬盘未连接时，请先接入设备。</div><div class="backup-grid">${data.targets.map((target) => `<article class="backup-target"><h3>${icon("shield")}${e(target.name)}</h3><p>${e(target.path)}</p><div class="target-footer"><span class="badge ${target.enabled && target.available ? "done" : "planned"}">${!target.enabled ? "未启用" : target.available ? "可用" : "未连接"}</span><div class="toolbar-group">${state.session.local_controls ? button("backup-browse", "查看快照", "folder", `data-target="${e(target.name)}" ${target.has_snapshots ? "" : "disabled"}`) : ""}<button class="button small primary" data-action="backup" data-target="${e(target.name)}" ${!target.enabled || !target.available ? "disabled" : ""}>${icon("plus")}创建备份</button></div></div></article>`).join("") || '<section class="panel">' + empty("还没有配置备份目标", "在实验库 config.json 中设置 backup.targets 后，可在此创建快照。") + "</section>"}</div><section class="panel"><header class="panel-header"><h2>实验完整性检查</h2>${icon("shield")}</header><div class="panel-body"><p class="prose">逐文件重新计算 SHA256，检查文件改动、丢失和未登记资料。</p><div class="choice-card"><select id="verify-experiment" aria-label="选择待校验实验">${records.items.map((r) => `<option value="${e(r.id)}">${e(r.id + " · " + r.title)}</option>`).join("")}</select><button class="button primary" data-action="verify-selected" ${!records.items.length ? "disabled" : ""}>开始校验</button></div></div></section><section class="panel backup-history"><header class="panel-header"><h2>最近的备份</h2><span class="muted">最多 100 条记录</span></header>${data.history.length ? `<div class="table-wrap"><table><thead><tr><th>创建时间</th><th>备份目标</th><th>快照编号</th><th>文件 / 数据量</th><th>结果</th></tr></thead><tbody>${data.history.map((item) => `<tr><td>${e(date(item.ts, true))}</td><td>${e(item.target)}</td><td class="mono">${e(item.snapshot)}</td><td>${item.files || 0} 个<span class="cell-subtitle">${size(item.bytes_total)}</span></td><td><span class="badge ${item.ok ? "done" : "aborted"}">${item.ok ? "已完成" : "部分失败"}</span></td></tr>`).join("")}</tbody></table></div>` : empty("给实验库创建第一份备份", "选择上方可用目标，保存当前数据的快照。")}</section>`
+  );
+}
+
+function openBackupDirectory() {
+  openDialog(
+    "打开已有备份",
+    field("backup_directory", "备份目录", "", {
+      required: true,
+      hint: "填写含有 expvault-target.json、snapshots 和 objects 的目录绝对路径。",
+    }),
+    (form) => openBackupSnapshots({ directory: String(form.get("backup_directory")).trim() }),
+    { label: "查看快照", kicker: "备份与校验" },
+  );
+}
+
+async function openBackupSnapshots(source) {
+  const previousDialog = state.dialog;
+  const data = await api("backup/snapshots?" + query(source));
+  if (state.dialog !== previousDialog) return;
+  if (!data.items.length) {
+    openDialog("备份快照", `<p class="prose">${e(data.directory)}</p><p>这个目录还没有可读取的快照。</p>`, null);
+    return;
+  }
+  openDialog(
+    "备份快照",
+    `<p class="field-hint backup-path">${e(data.directory)}</p>
+    <div class="form-grid">
+      <div class="form-field"><label for="backup-snapshot">快照</label><select id="backup-snapshot" data-picker-filter>
+        ${data.items.map((item) => `<option value="${e(item.id)}" ${item.id === data.latest ? "selected" : ""}>${e(date(item.created_at, true))} · ${e(item.id)} · ${item.files} 个文件</option>`).join("")}
+      </select></div>
+      <div class="form-field"><label for="backup-filter">按文件路径筛选</label><input id="backup-filter" type="search" placeholder="例如实验编号或文件名" maxlength="4096" data-picker-filter></div>
+    </div>
+    <p class="field-hint" id="backup-file-status" role="status"></p>
+    <div id="backup-file-list"></div>
+    <div class="heading-actions">
+      <button type="button" class="button small" id="backup-page-previous" disabled>上一页</button>
+      <button type="button" class="button small" id="backup-page-next" disabled>下一页</button>
+      <button type="button" class="button primary" id="backup-restore-next" disabled>${icon("download")}恢复到新目录</button>
+    </div>`,
+    null,
+    { wide: true, kicker: "备份与校验" },
+  );
+  const dialog = state.dialog;
+  const limit = 50;
+  let offset = 0, timer, request, selection;
+  const restore = $("backup-restore-next");
+  const previous = $("backup-page-previous");
+  const next = $("backup-page-next");
+  const status = $("backup-file-status");
+  const loadFiles = async () => {
+    request?.abort();
+    const active = new AbortController();
+    request = active;
+    const values = { ...source, snapshot: $("backup-snapshot").value, contains: $("backup-filter").value.trim() };
+    restore.disabled = previous.disabled = next.disabled = true;
+    status.textContent = "正在读取文件清单…";
+    $("backup-file-list").replaceChildren();
+    try {
+      const files = await api("backup/files?" + query({ ...values, offset, limit }), { signal: active.signal });
+      if (active.signal.aborted || state.dialog !== dialog) return;
+      status.textContent = files.total
+        ? `共 ${files.total} 个文件 · ${size(files.bytes)} · 第 ${offset / limit + 1} / ${Math.ceil(files.total / limit)} 页`
+        : "没有匹配的备份文件";
+      $("backup-file-list").innerHTML = files.items.length
+        ? `<div class="table-wrap"><table><caption class="sr-only">快照文件</caption><thead><tr><th scope="col">文件路径</th><th scope="col">大小</th><th scope="col">操作</th></tr></thead><tbody>${files.items.map((item) =>
+          `<tr><td class="backup-path">${e(item.path)}</td><td>${size(item.size)}</td><td><a class="text-button" aria-label="下载 ${e(item.path)}" href="/api/backup/file?${e(query({ ...source, snapshot: values.snapshot, path: item.path }))}" download>下载</a></td></tr>`
+        ).join("")}</tbody></table></div>`
+        : "";
+      selection = { values, destination: files.suggested_destination };
+      restore.disabled = !files.total;
+      previous.disabled = offset === 0;
+      next.disabled = !files.has_more;
+    } catch (error) {
+      if (!active.signal.aborted && state.dialog === dialog) status.textContent = errorText(error);
+    }
+  };
+  const resetFiles = () => {
+    clearTimeout(timer);
+    request?.abort();
+    offset = 0;
+    restore.disabled = previous.disabled = next.disabled = true;
+    timer = setTimeout(loadFiles, 200);
+  };
+  dialog.cleanup = () => { clearTimeout(timer); request?.abort(); };
+  $("backup-snapshot").addEventListener("change", resetFiles);
+  $("backup-filter").addEventListener("input", resetFiles);
+  previous.addEventListener("click", () => { offset -= limit; loadFiles(); });
+  next.addEventListener("click", () => { offset += limit; loadFiles(); });
+  restore.addEventListener("click", () => openBackupRestore(selection));
+  await loadFiles();
+}
+
+function openBackupRestore({ values, destination }) {
+  openDialog(
+    "预览恢复",
+    `<p class="prose">快照 ${e(values.snapshot)} · ${values.contains ? `文件路径包含「${e(values.contains)}」` : "全部文件"}</p>
+    ${field("restore_destination", "恢复目录", destination, {
+      required: true, hint: "填写新目录或空目录的绝对路径，位置需与当前实验库和备份目录分开。",
+    })}`,
+    async (form) => {
+      const dialog = state.dialog;
+      const args = { ...values, destination: String(form.get("restore_destination")).trim() };
+      const preview = await api("backup/preview", { method: "POST", body: JSON.stringify(args) });
+      if (state.dialog !== dialog) return;
+      if (!preview.files) throw new Error("没有匹配的文件可恢复");
+      if (preview.missing_count) throw new Error(`备份缺少 ${preview.missing_count} 个完整文件，包括 ${preview.missing.slice(0, 3).join("、")}。`);
+      openDialog(
+        "确认恢复备份",
+        `<p class="prose">将校验并恢复 ${preview.files} 个文件，共 ${size(preview.bytes)}。</p><p class="backup-path">${e(preview.destination)}</p>`,
+        async () => {
+          closeDialog(true);
+          $("task-panel").hidden = false;
+          const result = await runAction("backup.restore", { ...args, destination: preview.destination });
+          if (result.cancelled) return;
+          if (!state.dialog) showBackupRestore(result);
+          else toast("备份恢复完成，可在任务列表查看结果。");
+        },
+        { label: "恢复文件", kicker: "备份与校验" },
+      );
+    },
+    { label: "预览恢复", kicker: "备份与校验" },
+  );
+}
+
+function showBackupRestore(result) {
+  $("task-panel").hidden = true;
+  openDialog(
+    "备份已恢复",
+    `<p class="prose">已恢复 ${result.files} 个文件，共 ${size(result.bytes)}。</p><p class="backup-path">${e(result.destination)}</p>
+    ${result.can_open ? button("backup-open-restored", "打开恢复副本", "folder", `data-id="${e(result.job_id)}"`, true) : ""}
+    <p id="backup-open-status" class="field-hint" role="status"></p>`,
+    null,
+    { kicker: "备份与校验" },
   );
 }
 
@@ -3192,7 +3327,7 @@ function renderTasks() {
     jobs
       .map(
         (job) =>
-          `<article class="task-row"><strong>${e(operationNames[job.operation] || job.operation)}</strong><p>${e(job.message)}</p>${pendingStatuses.has(job.status) ? `<progress max="100" value="${job.progress || 0}"></progress>` : ""}<footer><span>${e({ queued: "等待中", running: "进行中", succeeded: "已完成", failed: "未完成", partial: "部分完成", cancelled: "已取消", interrupted: "需要核对", unconfirmed: "连接中断" }[job.status] || job.status)}</span>${pendingStatuses.has(job.status) && job.can_cancel ? `<button class="text-button" data-action="cancel-job" data-id="${e(job.id)}">取消导入</button>` : ""}${job.status === "succeeded" && ["experiments.verify", "backup.create", "reports.export", "experiments.duplicate", "experiments.batch"].includes(job.operation) ? `<button class="text-button" data-action="job-result" data-id="${e(job.id)}">查看结果</button>` : ""}</footer></article>`,
+          `<article class="task-row"><strong>${e(operationNames[job.operation] || job.operation)}</strong><p>${e(job.message)}</p>${pendingStatuses.has(job.status) ? `<progress max="100" value="${job.progress || 0}"></progress>` : ""}<footer><span>${e({ queued: "等待中", running: "进行中", succeeded: "已完成", failed: "未完成", partial: "部分完成", cancelled: "已取消", interrupted: "需要核对", unconfirmed: "连接中断" }[job.status] || job.status)}</span>${pendingStatuses.has(job.status) && job.can_cancel ? `<button class="text-button" data-action="cancel-job" data-id="${e(job.id)}">${job.operation === "backup.restore" ? "取消恢复" : "取消导入"}</button>` : ""}${job.status === "succeeded" && ["experiments.verify", "backup.create", "backup.restore", "reports.export", "experiments.duplicate", "experiments.batch"].includes(job.operation) ? `<button class="text-button" data-action="job-result" data-id="${e(job.id)}">查看结果</button>` : ""}</footer></article>`,
       )
       .join("") || '<div class="task-empty">还没有后台任务</div>';
 }
@@ -3232,7 +3367,7 @@ function watchJob(job) {
 async function runAction(operation, args) {
   if (
     nasReadOnly() &&
-    !["reports.export", "experiments.verify"].includes(operation)
+    !["reports.export", "experiments.verify", "backup.restore"].includes(operation)
   )
     throw new Error("NAS 当前为只读连接，请在编辑主机修改");
   const requestId = uuid();
@@ -3335,6 +3470,8 @@ function showJobResult(job) {
       `<div class="alert success">已保存当前实验库快照，原始数据保持不变。</div><div class="verify-grid"><div><strong>${stats.files || 0}</strong><small>文件数量</small></div><div><strong>${size(stats.bytes_total || stats.bytes || 0)}</strong><small>数据总量</small></div><div><strong>${stats.new_objects || 0}</strong><small>新增备份对象</small></div></div><p class="field-hint">可在备份中心查看快照编号和目标。</p>`,
       null,
     );
+  } else if (job.operation === "backup.restore") {
+    showBackupRestore(result);
   }
 }
 
@@ -3663,6 +3800,23 @@ document.addEventListener("click", async (event) => {
             item.operation === "experiments.verify" && item.exp_id === expId,
         );
       showJobResult(job);
+    } else if (action === "backup-directory") {
+      openBackupDirectory();
+    } else if (action === "backup-browse") {
+      await openBackupSnapshots({ target: control.dataset.target });
+    } else if (action === "backup-open-restored") {
+      control.disabled = true;
+      $("backup-open-status").textContent = "正在建立恢复副本的索引…";
+      try {
+        const result = await api("backup/open", { method: "POST", body: JSON.stringify({ id: control.dataset.id }) });
+        if (control.isConnected) {
+          closeDialog(true);
+          location.assign(result.url);
+        }
+      } finally {
+        control.disabled = false;
+        if (control.isConnected) $("backup-open-status").textContent = "";
+      }
     } else if (action === "backup") {
       $("task-panel").hidden = false;
       await runAction("backup.create", { target: control.dataset.target });
