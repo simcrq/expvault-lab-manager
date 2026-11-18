@@ -62,6 +62,7 @@
 !/ev/sync_activity.py
 !/ev/sync_discovery.py
 !/ev/sync_merge.py
+!/ev/sync_pairing.py
 !/ev/sync_transport.py
 !/ev/sync_webdav.py
 !/ev/templates.py

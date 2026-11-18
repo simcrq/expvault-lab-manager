@@ -1,7 +1,6 @@
 """Discover ExpVault relays with a bounded UDP broadcast on local interfaces."""
 from __future__ import annotations
 
-import hmac
 import json
 import re
 import secrets
@@ -14,12 +13,7 @@ from .network import local_interfaces, private_ipv4
 PORT = 37666
 PREFIX = b"expvault-sync-discover-v1:"
 MAX_PACKET = 1024
-PAIRING_TTL = 300
 HEX = re.compile(r"[a-f0-9]{64}")
-
-
-def pairing_proof(code, url, fingerprint):
-    return hmac.digest(code.encode("ascii"), f"{url}\n{fingerprint}".encode(), "sha256").hex()
 
 
 class DiscoveryResponder:
@@ -87,14 +81,14 @@ def discover(*, exclude=""):
             try:
                 value = json.loads(packet[len(request):])
                 port, name = value["port"], value["hostname"]
-                fingerprint, proof = value["fingerprint"], value["proof"]
+                fingerprint = value["fingerprint"]
                 if type(port) is not int or not 1 <= port <= 65535 or not isinstance(name, str) or len(name) > 80:
                     continue
-                if not HEX.fullmatch(fingerprint) or not isinstance(proof, str) or (proof and not HEX.fullmatch(proof)):
+                if not HEX.fullmatch(fingerprint):
                     continue
                 url = f"https://{peer[0]}:{port}"
                 if url != exclude:
-                    found[url] = {"url": url, "hostname": name, "fingerprint": fingerprint, "proof": proof}
+                    found[url] = {"url": url, "hostname": name, "fingerprint": fingerprint, "approval": value.get("approval") is True}
             except (ValueError, KeyError, TypeError):
                 continue
     return sorted(found.values(), key=lambda item: (item["hostname"], item["url"]))

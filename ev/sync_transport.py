@@ -21,7 +21,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, quote, unquote
 
 from .sync_merge import encoded
-from .sync_discovery import DiscoveryResponder, PAIRING_TTL, pairing_proof
+from .sync_discovery import DiscoveryResponder
+from .sync_pairing import IncomingPairings, PAIRING_TTL, REQUEST_ID, commitment, verification_code
 from .util import now_iso
 
 CHUNK = 1024 * 1024
@@ -124,12 +125,12 @@ class Repository:
         source.send(self, kind, key, stop, progress)
 
 
-def pinned_connection(host, port, fingerprint):
+def pinned_connection(host, port, fingerprint, *, timeout=15):
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    connection = http.client.HTTPSConnection(host, port, context=context, timeout=15)
+    connection = http.client.HTTPSConnection(host, port, context=context, timeout=timeout)
     try:
         connection.connect()
         actual = hashlib.sha256(connection.sock.getpeercert(binary_form=True)).hexdigest()
@@ -141,38 +142,66 @@ def pinned_connection(host, port, fingerprint):
         raise
 
 
-def redeem_invite(peer, code):
-    if (not isinstance(peer, dict) or not isinstance(code, str)
-            or not all(isinstance(peer.get(key), str) for key in ("url", "fingerprint", "proof"))):
-        raise ValueError("请选择在线主机并填写配对码")
-    url, fingerprint, proof = (peer[key] for key in ("url", "fingerprint", "proof"))
-    code = code.strip().replace("-", "").lower()
-    if not re.fullmatch(r"[a-f0-9]{16}", code):
-        raise ValueError("请输入接收电脑上显示的 16 位配对码")
-    if not HEX.fullmatch(fingerprint) or not HEX.fullmatch(proof):
-        raise ValueError("请在接收电脑上显示配对码，再重新搜索主机")
-    if not hmac.compare_digest(pairing_proof(code, url, fingerprint), proof):
-        raise ValueError("配对码与所选主机不匹配，请核对后重新搜索")
-    parts = urlsplit(url)
-    host = private_host(parts.hostname)
-    port = parts.port
-    if not port or url != f"https://{host}:{port}":
-        raise ValueError("局域网主机地址无效")
-    try:
-        connection = pinned_connection(host, port, fingerprint)
+class OutgoingPairing:
+    def __init__(self, peer):
+        if not isinstance(peer, dict) or peer.get("approval") is not True:
+            raise ValueError("此主机不支持确认配对，请使用手动配对")
+        self.url, self.fingerprint = peer.get("url"), peer.get("fingerprint")
+        if not isinstance(self.url, str) or not isinstance(self.fingerprint, str) or not HEX.fullmatch(self.fingerprint):
+            raise ValueError("请选择有效的在线主机")
+        parts = urlsplit(self.url)
+        self.host, self.port = private_host(parts.hostname), parts.port
+        if not self.port or self.url != f"https://{self.host}:{self.port}":
+            raise ValueError("局域网主机地址无效")
+        self.nonce = secrets.token_hex(32)
+        self.deadline = time.monotonic() + PAIRING_TTL
+        offer = self.request("start", {"hostname": machine_name(), "commitment": commitment(self.nonce)})
+        self.id, challenge = offer.get("id"), offer.get("challenge")
+        if (not isinstance(self.id, str) or not REQUEST_ID.fullmatch(self.id)
+                or not isinstance(challenge, str) or not HEX.fullmatch(challenge)):
+            raise ValueError("接收电脑返回的配对请求无效")
+        self.code = verification_code(self.nonce, self.fingerprint, self.id, challenge)
+        self.pairing = None
+        if self.poll() != "pending":
+            raise ValueError("接收电脑返回的初始配对状态无效")
+
+    def request(self, action, payload):
         try:
-            connection.request("POST", "/pair", headers={"Authorization": "Bearer " + code})
-            response = connection.getresponse()
-            if response.status != 200:
-                raise ValueError("配对码已失效，请在接收电脑重新生成并搜索")
-            value = json.loads(response.read(2048))
-        finally:
-            connection.close()
-    except (OSError, http.client.HTTPException):
-        raise ValueError("无法连接所选主机，请确认局域网和防火墙设置后重试") from None
-    if not isinstance(value, dict) or set(value) != {"url", "fingerprint", "token"} or value["url"] != url or value["fingerprint"] != fingerprint:
-        raise ValueError("所选主机返回了无效的配对信息")
-    return value
+            connection = pinned_connection(self.host, self.port, self.fingerprint, timeout=4)
+            try:
+                connection.request("POST", "/pair/" + action, body=encoded(payload),
+                                   headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                if response.status != 200:
+                    raise ValueError("接收电脑未接受配对请求，请稍后重试或使用手动配对")
+                value = json.loads(response.read(2048))
+            finally:
+                connection.close()
+        except (OSError, http.client.HTTPException):
+            raise ValueError("无法连接接收电脑，请检查网络和防火墙后重试") from None
+        if not isinstance(value, dict):
+            raise ValueError("接收电脑返回的配对信息无效")
+        return value
+
+    def poll(self):
+        if time.monotonic() >= self.deadline:
+            return "expired"
+        value = self.request("status", {"id": self.id, "nonce": self.nonce})
+        status = value.get("status")
+        if status == "approved":
+            pairing = value.get("pairing")
+            if (not isinstance(pairing, dict) or set(pairing) != {"url", "fingerprint", "token"}
+                    or pairing["url"] != self.url or pairing["fingerprint"] != self.fingerprint
+                    or not isinstance(pairing["token"], str)):
+                raise ValueError("接收电脑返回的配对信息无效")
+            HTTPSRepository(**pairing)
+            self.pairing = pairing
+        if status not in ("pending", "approved", "rejected", "expired"):
+            raise ValueError("接收电脑返回的配对状态无效")
+        return status
+
+    def cancel(self):
+        self.request("cancel", {"id": self.id, "nonce": self.nonce})
 
 
 class HTTPSRepository:
@@ -306,8 +335,7 @@ class LANServer:
         self.token = token or secrets.token_urlsafe(32)
         self.repository = repository
         self.hostname = machine_name()
-        self.invite_lock = threading.Lock()
-        self.invite = None
+        self.pairing_requests = IncomingPairings(self.fingerprint)
         self.peers = {}
         self.peer_lock = threading.Lock()
         self.on_peer = on_peer
@@ -403,17 +431,31 @@ class LANServer:
             do_GET = do_HEAD = do_PUT = handle_request
 
             def do_POST(self):
-                if self.path != "/pair":
+                if self.path not in ("/pair/start", "/pair/status", "/pair/cancel"):
                     self.respond(404)
                     return
-                with owner.invite_lock:
-                    code = owner.invite_code()
-                    supplied = self.headers.get("Authorization", "").encode()
-                    if not code or not hmac.compare_digest(supplied, ("Bearer " + code).encode()):
-                        self.respond(403)
-                        return
-                    self.respond(200, encoded(owner.pairing()))
-                    owner.invite = None
+                if not owner.slots.acquire(blocking=False):
+                    self.respond(429)
+                    return
+                try:
+                    self.connection.settimeout(4)
+                    length = self.headers.get("Content-Length", "")
+                    if not length.isascii() or not length.isdecimal() or len(length) > 4 or self.headers.get("Transfer-Encoding"):
+                        raise ValueError("配对请求格式无效")
+                    if not 1 <= int(length) <= 1024:
+                        raise ValueError("配对请求格式无效")
+                    payload = json.loads(self.rfile.read(int(length)))
+                    if not isinstance(payload, dict):
+                        raise ValueError("配对请求格式无效")
+                    if self.path == "/pair/start":
+                        result = owner.pairing_requests.start(self.client_address[0], payload)
+                    else:
+                        result = owner.pairing_requests.exchange(self.path.rsplit("/", 1)[1], payload, owner.pairing())
+                    self.respond(200, encoded(result))
+                except ValueError:
+                    self.respond(400)
+                finally:
+                    owner.slots.release()
 
         self.server = ThreadingHTTPServer((host, port), Handler)
         self.server.daemon_threads = True
@@ -432,25 +474,10 @@ class LANServer:
     def pairing(self):
         return {"url":f"https://{self.host}:{self.port}", "token":self.token, "fingerprint":self.fingerprint}
 
-    def invite_code(self):
-        if self.invite and self.invite[1] > time.monotonic():
-            return self.invite[0]
-        return ""
-
-    def new_invite(self):
-        with self.invite_lock:
-            if not self.discovery:
-                return {"code": ""}
-            code = secrets.token_hex(8)
-            self.invite = code, time.monotonic() + PAIRING_TTL
-        return {"code": "-".join(code[i:i+4] for i in range(0, len(code), 4)), "expires_in": PAIRING_TTL}
-
     def discovery_info(self):
-        with self.invite_lock:
-            code = self.invite_code()
-        url = self.pairing()["url"]
+        # Older clients still recognize this relay and can use manual pairing.
         return {"hostname": self.hostname, "port": self.port, "fingerprint": self.fingerprint,
-                "proof": pairing_proof(code, url, self.fingerprint) if code else ""}
+                "approval": True, "proof": ""}
 
     def touch_peer(self, address, name):
         name = unquote(name[:320])
@@ -507,9 +534,8 @@ class LANServer:
             return value
 
     def close(self):
-        with self.invite_lock:
-            self.invite = None
-            discovery, self.discovery = self.discovery, None
+        self.pairing_requests.close()
+        discovery, self.discovery = self.discovery, None
         if discovery:
             discovery.close()
         self.server.shutdown()
