@@ -20,7 +20,7 @@ Windows 安装时勾选 **Add Python to PATH**，并保留 Python Launcher。无
 
 ### 2. 解压程序
 
-下载 [expvault-lab-manager-1.9.2.zip](https://github.com/simcrq/expvault-lab-manager/releases/download/v1.9.2/expvault-lab-manager-1.9.2.zip)，然后**完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
+下载 [expvault-lab-manager-1.9.3.zip](https://github.com/simcrq/expvault-lab-manager/releases/download/v1.9.3/expvault-lab-manager-1.9.3.zip)，然后**完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
 
 如果拿到的是源码目录，也可以使用，启动文件与独立包有所不同：
 
@@ -142,7 +142,7 @@ NAS 共享库不需要双向同步，断开后也不会自动创建空的本地�
 | 能访问同一个共享盘或同步盘文件夹 | **共享目录中转** | 两端填写各自看到的绝对路径，指向同一份共享内容；中转目录放在实验库之外 |
 | 两台电脑可以直接互通 | **局域网加密直连** | 接收电脑从下拉框选择网卡。发送电脑选中在线主机后，两端核对 6 位识别码，在接收电脑确认配对 |
 
-保存后，程序运行期间会自动检查；可点击「立即同步」「暂停同步」或「恢复自动同步」。关闭程序后不再自动同步。
+程序运行期间可暂停或恢复自动同步。局域网直连时，发送电脑的新文件可在发送电脑点击「立即同步」，接收电脑会自动合并。接收电脑的「发布本机改动」供本机编辑后使用。
 
 ![自动同步：连接主机、真实传输进度、待处理冲突与本机日志](docs/screenshots/sync.png)
 

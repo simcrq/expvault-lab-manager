@@ -1035,6 +1035,9 @@ async function filesSection() {
 function syncStatusHTML(data) {
   const settings = data.settings,
     status = data.status;
+  const receiving = settings.mode === "lan-host";
+  const runDisabled = !data.configured || !settings.enabled || status.running;
+  const runAttributes = `${runDisabled ? "disabled" : ""}${receiving ? ' aria-describedby="sync-host-run-hint"' : ""}`;
   const mode =
     {
       folder: "共享目录中转",
@@ -1042,7 +1045,7 @@ function syncStatusHTML(data) {
       "lan-host": "局域网直连 · 接收电脑",
       "lan-client": "局域网直连 · 连接另一电脑",
     }[settings.mode] || "尚未配置";
-  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>上次成功同步</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验资料（包括 PDF、文档与无扩展名文件）、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_photos === false ? "跳过照片" : settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "包含照片，不限大小"} · ${settings.include_videos === false ? "跳过视频" : "包含视频"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}${status.retry_at ? `<p class="field-hint">下次云端重试：${e(date(new Date(status.retry_at * 1000).toISOString(), true))}；限流等待期间「立即同步」不会提前发送请求。</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p><div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", "立即同步", "refresh", !data.configured || !settings.enabled || status.running ? "disabled" : "", true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${settings.mode === "lan-host" ? button("sync-pairing", "手动配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
+  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>${receiving ? "上次本机处理完成" : "上次成功同步"}</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验资料（包括 PDF、文档与无扩展名文件）、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_photos === false ? "跳过照片" : settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "包含照片，不限大小"} · ${settings.include_videos === false ? "跳过视频" : "包含视频"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}${status.retry_at ? `<p class="field-hint">下次云端重试：${e(date(new Date(status.retry_at * 1000).toISOString(), true))}；限流等待期间「立即同步」不会提前发送请求。</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p>${receiving ? '<p class="field-hint" id="sync-host-run-hint">发送电脑新导入的文件，请在发送电脑点击「立即同步」。本机会自动合并传来的文件。</p>' : ""}<div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", receiving ? "发布本机改动" : "立即同步", "refresh", runAttributes, true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${receiving ? button("sync-pairing", "手动配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
 }
 function syncConflictsHTML(data) {
   const labels = {
@@ -1094,6 +1097,7 @@ function syncConnectionHTML(data) {
 function syncProgressHTML(data) {
   const progress = data.progress || { label: "等待同步" };
   const waitingForMerge = progress.phase === "received";
+  const completeLabel = data.settings.mode === "lan-host" ? "本机处理完成" : "本轮完成";
   const active = data.status.running || progress.phase === "receiving" || waitingForMerge;
   const value =
     progress.percent == null
@@ -1113,8 +1117,8 @@ function syncProgressHTML(data) {
     ? "等待合并"
     : progress.percent == null
       ? active ? "正在处理" : "等待下一轮"
-      : progress.phase === "complete" ? "本轮完成" : `当前阶段 ${progress.percent}%`;
-  return `<header class="panel-header"><h2>同步进度</h2><span class="muted">${stage}</span></header><div class="panel-body sync-progress"><div class="sync-progress-heading"><strong role="status">${e(progress.label)}</strong><span>${e([count, bytes].filter(Boolean).join(" · "))}</span></div><progress aria-label="同步进度" max="100" ${value}></progress>${progress.current_file ? `<p class="sync-current-file">${e(progress.current_file)}</p>` : ""}<p class="field-hint">百分比表示当前阶段进度。扫描、比较和校验阶段在总量确定前显示处理中；完成全部合并后显示本轮完成。</p></div>`;
+      : progress.phase === "complete" ? completeLabel : `当前阶段 ${progress.percent}%`;
+  return `<header class="panel-header"><h2>同步进度</h2><span class="muted">${stage}</span></header><div class="panel-body sync-progress"><div class="sync-progress-heading"><strong role="status">${e(progress.label)}</strong><span>${e([count, bytes].filter(Boolean).join(" · "))}</span></div><progress aria-label="同步进度" max="100" ${value}></progress>${progress.current_file ? `<p class="sync-current-file">${e(progress.current_file)}</p>` : ""}<p class="field-hint">百分比表示当前阶段进度。扫描、比较和校验阶段在总量确定前显示处理中；本机处理结束后显示「${completeLabel}」。</p></div>`;
 }
 const syncLogLevels = { info: "信息", warning: "提醒", error: "失败" };
 function syncLogsHTML(logs) {

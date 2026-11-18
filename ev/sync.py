@@ -1032,7 +1032,8 @@ class SyncCoordinator:
             elif action != "run":
                 raise ValueError("同步操作无效")
             else:
-                self.activity.log("info", "已请求立即同步",phase="manual",force=True)
+                message = "已请求发布本机改动" if self.settings["mode"] == "lan-host" else "已请求立即同步"
+                self.activity.log("info", message, phase="manual", force=True)
         self.start()
         self.wake.set()
         return self.public()
@@ -1075,7 +1076,8 @@ class SyncCoordinator:
                         self.status.pop("retry_at", None)
                         # A publication arriving mid-cycle will wake a follow-up run.
                         self.last_applied_at = cycle_started_at
-                        self.activity.finish("complete",f'同步完成：{result["experiments"]} 个实验，{result["workspaces"]} 个工作空间；跳过 {result["skipped_files"]} 个文件，待处理冲突 {result["conflicts"]} 处')
+                        completion = "本机处理完成" if self.settings["mode"] == "lan-host" else "同步完成"
+                        self.activity.finish("complete", f'{completion}。当前有 {result["experiments"]} 个实验和 {result["workspaces"]} 个工作空间，本轮跳过 {result["skipped_files"]} 个文件，待处理冲突 {result["conflicts"]} 处。')
                     except Timeout:
                         self.status["error"] = "等待本机写入完成，下一轮自动重试"
                         self.activity.finish("waiting",self.status["error"])
