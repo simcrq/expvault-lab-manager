@@ -1093,7 +1093,8 @@ function syncConnectionHTML(data) {
 }
 function syncProgressHTML(data) {
   const progress = data.progress || { label: "等待同步" };
-  const active = data.status.running || progress.phase === "receiving";
+  const waitingForMerge = progress.phase === "received";
+  const active = data.status.running || progress.phase === "receiving" || waitingForMerge;
   const value =
     progress.percent == null
       ? active
@@ -1103,12 +1104,17 @@ function syncProgressHTML(data) {
   const count =
     progress.total_files == null
       ? ""
-      : `${progress.done_files || 0} / ${progress.total_files} ${["upload", "download", "receiving"].includes(progress.phase) ? "个文件" : "项"}`;
+      : `${progress.done_files || 0} / ${progress.total_files} ${["upload", "download", "receiving", "received"].includes(progress.phase) ? "个文件" : "项"}`;
   const bytes =
     progress.bytes_total == null
       ? ""
       : `${size(progress.bytes_done || 0)} / ${size(progress.bytes_total)}`;
-  return `<header class="panel-header"><h2>同步进度</h2><span class="muted">${progress.percent == null ? (active ? "正在处理" : "等待下一轮") : progress.phase === "complete" ? "本轮完成" : `当前阶段 ${progress.percent}%`}</span></header><div class="panel-body sync-progress"><div class="sync-progress-heading"><strong role="status">${e(progress.label)}</strong><span>${e([count, bytes].filter(Boolean).join(" · "))}</span></div><progress aria-label="同步进度" max="100" ${value}></progress>${progress.current_file ? `<p class="sync-current-file">${e(progress.current_file)}</p>` : ""}<p class="field-hint">百分比表示当前阶段进度。扫描、比较和校验阶段在总量确定前显示处理中；完成全部合并后显示本轮完成。</p></div>`;
+  const stage = waitingForMerge
+    ? "等待合并"
+    : progress.percent == null
+      ? active ? "正在处理" : "等待下一轮"
+      : progress.phase === "complete" ? "本轮完成" : `当前阶段 ${progress.percent}%`;
+  return `<header class="panel-header"><h2>同步进度</h2><span class="muted">${stage}</span></header><div class="panel-body sync-progress"><div class="sync-progress-heading"><strong role="status">${e(progress.label)}</strong><span>${e([count, bytes].filter(Boolean).join(" · "))}</span></div><progress aria-label="同步进度" max="100" ${value}></progress>${progress.current_file ? `<p class="sync-current-file">${e(progress.current_file)}</p>` : ""}<p class="field-hint">百分比表示当前阶段进度。扫描、比较和校验阶段在总量确定前显示处理中；完成全部合并后显示本轮完成。</p></div>`;
 }
 const syncLogLevels = { info: "信息", warning: "提醒", error: "失败" };
 function syncLogsHTML(logs) {

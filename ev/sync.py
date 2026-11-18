@@ -782,7 +782,9 @@ class SyncCoordinator:
         if settings["mode"] == "lan-host":
             repository = Repository(self.engine.state_dir/"lan-relay", create=True)
             if not self.server:
-                self.server = LANServer(repository, self.engine.state_dir/"tls", settings["host"], port=settings["port"], token=settings["token"],on_peer=self.connected_peer,on_received=self.received_file)
+                self.server = LANServer(repository, self.engine.state_dir/"tls", settings["host"],
+                                        port=settings["port"], token=settings["token"], on_peer=self.connected_peer,
+                                        on_received=self.received_file, on_commit=self.wake.set)
                 self.settings["port"] = self.server.port
                 self.save_settings()
             return repository
@@ -943,7 +945,8 @@ class SyncCoordinator:
             progress = self.activity.snapshot()
             server = self.server
             incoming = server.incoming_progress() if server else None
-            if incoming and (incoming["active"] or not self.status.get("running") and incoming.get("finished_at",0) > self.last_applied_at):
+            if incoming and (incoming["active"] or (not self.status.get("running") and not self.status.get("error")
+                                                     and incoming.get("finished_at",0) > self.last_applied_at)):
                 progress = incoming
                 progress["current_file"] = self.redact(progress.get("current_file",""))
             if not settings.get("enabled") and not self.status.get("running"):
@@ -1065,11 +1068,13 @@ class SyncCoordinator:
                     try:
                         transport = self.transport()
                         self.check_connection(transport)
+                        cycle_started_at = time.monotonic()
                         result = self.engine.cycle(transport, self.settings, self.pending_resolution)
                         self.pending_resolution = None
                         self.status.update(result)
                         self.status.pop("retry_at", None)
-                        self.last_applied_at = time.time()
+                        # A publication arriving mid-cycle will wake a follow-up run.
+                        self.last_applied_at = cycle_started_at
                         self.activity.finish("complete",f'同步完成：{result["experiments"]} 个实验，{result["workspaces"]} 个工作空间；跳过 {result["skipped_files"]} 个文件，待处理冲突 {result["conflicts"]} 处')
                     except Timeout:
                         self.status["error"] = "等待本机写入完成，下一轮自动重试"

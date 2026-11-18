@@ -91,6 +91,8 @@ class SyncActivity:
                 percent = None
             if progress.get("phase") == "complete":
                 percent = 100
+            elif progress.get("phase") == "apply" and percent is not None:
+                percent = min(99, percent)
             elif progress.get("phase") in ("idle","waiting","paused","error"):
                 percent = None
             progress.update(percent=percent,indeterminate=percent is None,run_id=self.run_id)

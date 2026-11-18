@@ -306,7 +306,7 @@ class HTTPSRepository:
 
 
 class LANServer:
-    def __init__(self, repository, state, host, *, port=0, token=None, on_peer=None, on_received=None):
+    def __init__(self, repository, state, host, *, port=0, token=None, on_peer=None, on_received=None, on_commit=None):
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import ec
@@ -340,6 +340,7 @@ class LANServer:
         self.peer_lock = threading.Lock()
         self.on_peer = on_peer
         self.on_received = on_received
+        self.on_commit = on_commit
         self.receiving = {}
         self.incoming = {}
         owner = self
@@ -413,6 +414,9 @@ class LANServer:
                         finally:
                             if transfer:
                                 owner.end_receive(transfer,size,self.client_address[0],accepted)
+                        if kind == "commits" and owner.on_commit:
+                            # Only a published manifest tells the receiver where the staged bytes belong.
+                            owner.on_commit()
                         self.respond(201)
                     elif path.is_file():
                         self.send_response(200)
@@ -516,7 +520,7 @@ class LANServer:
             self.receiving.pop(transfer,None)
             self.incoming["done_files"] += int(accepted)
             self.incoming["failed"] |= not accepted
-            self.incoming["finished_at"] = time.time()
+            self.incoming["finished_at"] = time.monotonic()
         if self.on_received:
             self.on_received(address,size,accepted)
 
@@ -526,11 +530,15 @@ class LANServer:
                 return None
             value = dict(self.incoming)
             active = bool(self.receiving)
-            value.update(active=active,percent=min(100,int(value["bytes_done"]*100/max(1,value["bytes_total"]))),indeterminate=False)
-            if not active:
-                value.update(phase="waiting",label="远端传输中断，等待对端重试" if value["failed"] else "已接收远端文件，等待下一轮合并")
-                if not value["failed"]:
-                    value["percent"] = 100
+            if active:
+                value.update(active=True, percent=min(99, int(value["bytes_done"]*100/max(1,value["bytes_total"]))),
+                             indeterminate=False)
+            else:
+                value.update(active=False, percent=None, indeterminate=True)
+                if value["failed"]:
+                    value.update(phase="waiting", label="远端传输中断，等待对端重试")
+                else:
+                    value.update(phase="received", label="文件已接收，等待实验变更记录并自动合并")
             return value
 
     def close(self):
