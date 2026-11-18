@@ -18,7 +18,7 @@ def private_ipv4(value):
         return False
 
 
-def local_interfaces():
+def local_interfaces(*, include_broadcast=False):
     import psutil
 
     result, seen = [], set()
@@ -30,7 +30,16 @@ def local_interfaces():
             address = entry.address
             if private_ipv4(address) and address not in seen:
                 seen.add(address)
-                result.append({"address": address, "name": name, "hotspot": False})
+                item = {"address": address, "name": name, "hotspot": False}
+                if include_broadcast and entry.netmask:
+                    try:
+                        subnet = ipaddress.IPv4Network(f"{address}/{entry.netmask}", strict=False)
+                    except ValueError:
+                        pass
+                    else:
+                        if subnet.prefixlen < 31:
+                            item["broadcast"] = str(subnet.broadcast_address)
+                result.append(item)
     return sorted(result, key=lambda item: (item["name"], item["address"]))
 
 

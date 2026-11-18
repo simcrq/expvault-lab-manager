@@ -779,10 +779,12 @@ function activities(items) {
 async function renderPage({ focusHeading = false } = {}) {
   const generation = ++state.generation;
   const content = $("content");
+  const keepContent = !focusHeading && $("page-title");
   $("global-query").value = state.listQuery;
   content.setAttribute("aria-busy", "true");
-  content.innerHTML =
-    '<div class="loading"><progress aria-label="读取实验资料"></progress><span>正在读取实验资料…</span></div>';
+  if (!keepContent)
+    content.innerHTML =
+      '<div class="loading"><progress aria-label="读取实验资料"></progress><span>正在读取实验资料…</span></div>';
   const active = state.view === "experiment" ? "experiments" : state.view;
   document
     .querySelectorAll(".nav-item")
@@ -809,6 +811,7 @@ async function renderPage({ focusHeading = false } = {}) {
     else if (state.view === "files") html = await libraryPage();
     else html = await detailPage();
     if (generation !== state.generation) return;
+    const scrollTop = window.scrollY;
     content.innerHTML = nasBanner() + html;
     hydratePage();
     applyNASReadOnly();
@@ -820,11 +823,14 @@ async function renderPage({ focusHeading = false } = {}) {
     document.title = `${heading?.textContent || $("breadcrumb-current").textContent} · expvault`;
     if (focusHeading && !$("editor").open)
       heading?.focus({ preventScroll: true });
-    else
+    else {
+      if (scrollTop) window.scrollTo({ top: scrollTop, behavior: "instant" });
       $("page-status").textContent = `已更新${$("breadcrumb-current").textContent}`;
+    }
   } catch (error) {
     if (generation !== state.generation) return;
-    content.innerHTML = `<div class="error-panel" role="alert"><h2>暂时无法读取资料</h2><p>${e(errorText(error))}</p>${button("reload", "重新读取", "refresh")}</div>`;
+    if (keepContent) toast(errorText(error), true);
+    else content.innerHTML = `<div class="error-panel" role="alert"><h2>暂时无法读取资料</h2><p>${e(errorText(error))}</p>${button("reload", "重新读取", "refresh")}</div>`;
   } finally {
     if (generation === state.generation) content.setAttribute("aria-busy", "false");
   }
@@ -1036,7 +1042,7 @@ function syncStatusHTML(data) {
       "lan-host": "局域网直连 · 接收电脑",
       "lan-client": "局域网直连 · 连接另一电脑",
     }[settings.mode] || "尚未配置";
-  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>上次成功同步</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验、原始文件、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_photos === false ? "跳过照片" : settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "包含照片，不限大小"} · ${settings.include_videos === false ? "跳过视频" : "包含视频"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}${status.retry_at ? `<p class="field-hint">下次云端重试：${e(date(new Date(status.retry_at * 1000).toISOString(), true))}；限流等待期间「立即同步」不会提前发送请求。</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p><div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", "立即同步", "refresh", !data.configured || !settings.enabled || status.running ? "disabled" : "", true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${settings.mode === "lan-host" ? button("sync-pairing", "显示配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
+  return `<header class="panel-header"><h2>本机同步状态</h2><span class="badge ${status.running ? "running" : settings.enabled ? "done" : "planned"}">${status.running ? "正在同步" : settings.enabled ? "自动同步已开启" : "同步未开启"}</span></header><div class="panel-body spaced"><dl class="metadata-list"><dt>方式</dt><dd>${e(mode)}</dd><dt>上次成功同步</dt><dd>${e(status.last_sync ? date(status.last_sync, true) : "尚未同步")}</dd><dt>同步范围</dt><dd>所有工作空间的实验资料（包括 PDF、文档与无扩展名文件）、步骤日志和测量记录</dd><dt>自动检查间隔</dt><dd>${settings.interval || 30} 秒（程序运行时）</dd><dt>媒体筛选</dt><dd>${settings.include_photos === false ? "跳过照片" : settings.photo_limit_mb ? `照片超过 ${e(settings.photo_limit_mb)} MB 跳过` : "包含照片，不限大小"} · ${settings.include_videos === false ? "跳过视频" : "包含视频"}</dd><dt>本轮跳过文件</dt><dd>${status.skipped_files || 0} 个</dd></dl>${status.error ? `<p class="sync-error" role="status">${e(status.error)}</p>` : ""}${status.retry_at ? `<p class="field-hint">下次云端重试：${e(date(new Date(status.retry_at * 1000).toISOString(), true))}；限流等待期间「立即同步」不会提前发送请求。</p>` : ""}<p class="field-hint">离线修改会保留在本机，连接恢复后重试。跳过的媒体不会因筛选而删除；历史备份、报告和设备配置各自保存。</p><div class="heading-actions">${button("sync-configure", data.configured ? "修改同步设置" : "配置同步", "edit", "", !data.configured)}${button("sync-run", "立即同步", "refresh", !data.configured || !settings.enabled || status.running ? "disabled" : "", true)}${data.configured ? button(settings.enabled ? "sync-pause" : "sync-resume", settings.enabled ? "暂停同步" : "恢复自动同步", "activity") : ""}${settings.mode === "lan-host" ? button("sync-pairing", "显示配对信息", "link", settings.enabled ? "" : "disabled") : ""}</div></div>`;
 }
 function syncConflictsHTML(data) {
   const labels = {
@@ -1083,7 +1089,7 @@ function syncConnectionHTML(data) {
     paused: "同步已暂停",
   };
   const peers = info.peers || [];
-  return `<header class="panel-header"><h2>连接主机</h2>${icon("link")}</header><div class="panel-body spaced"><div class="sync-host"><span class="badge ${["verified", "listening"].includes(info.state) ? "done" : "planned"}">${e(states[info.state] || "等待检查连接")}</span><h3>${e(info.hostname || (info.mode === "lan-client" ? "远端同步电脑" : "选择同步主机"))}</h3><p class="mono sync-host-address">${e(info.address || "配置同步后显示主机地址或中转目录")}</p><p class="field-hint">本机：${e(info.local_hostname || "—")}${info.last_seen ? `<br>上次连接检查：${e(date(info.last_seen, true))}` : ""}</p></div>${info.mode === "lan-host" ? `<div class="sync-peer-list"><strong>最近通信的电脑</strong>${peers.length ? peers.map((peer) => `<article><div><strong>${e(peer.hostname)}</strong><p class="mono">${e(peer.address)}</p></div><span>${peer.recent ? "最近有通信" : "等待再次通信"}<small>${e(date(peer.last_seen, true))}</small></span></article>`).join("") : '<p class="field-hint">还没有已认证的电脑连接。显示配对信息后，在另一台电脑粘贴连接。</p>'}</div>` : ""}<p class="field-hint">直连按每轮通信检查状态，不是持续在线会话。共享目录模式显示中转路径，不推测另一台电脑是否在线。</p><details class="sync-help"><summary>校园网下如何连接</summary><p class="prose">WebDAV：两端填写同一坚果云或其他 WebDAV 目录，通过云端交换资料，无需校园网内互通。共享目录：两台电脑选择同一共享盘或网盘同步目录。直连：一台接收连接，另一台粘贴配对信息；两端须互通。校园网隔离时，可使用共享目录中转或允许互通的独立热点。</p></details></div>`;
+  return `<header class="panel-header"><h2>连接主机</h2>${icon("link")}</header><div class="panel-body spaced"><div class="sync-host"><span class="badge ${["verified", "listening"].includes(info.state) ? "done" : "planned"}">${e(states[info.state] || "等待检查连接")}</span><h3>${e(info.hostname || (info.mode === "lan-client" ? "远端同步电脑" : "选择同步主机"))}</h3><p class="mono sync-host-address">${e(info.address || "配置同步后显示主机地址或中转目录")}</p><p class="field-hint">本机：${e(info.local_hostname || "—")}${info.last_seen ? `<br>上次连接检查：${e(date(info.last_seen, true))}` : ""}</p></div>${info.mode === "lan-host" ? `<div class="sync-peer-list"><strong>最近通信的电脑</strong>${peers.length ? peers.map((peer) => `<article><div><strong>${e(peer.hostname)}</strong><p class="mono">${e(peer.address)}</p></div><span>${peer.recent ? "最近有通信" : "等待再次通信"}<small>${e(date(peer.last_seen, true))}</small></span></article>`).join("") : '<p class="field-hint">还没有已认证的电脑连接。显示配对信息后，在另一台电脑选择本机并输入配对码。</p>'}</div>` : ""}<p class="field-hint">直连按每轮通信检查状态，不是持续在线会话。共享目录模式显示中转路径，不推测另一台电脑是否在线。</p><details class="sync-help"><summary>校园网下如何连接</summary><p class="prose">WebDAV：两端填写同一坚果云或其他 WebDAV 目录，通过云端交换资料，无需校园网内互通。共享目录：两台电脑选择同一共享盘或网盘同步目录。直连：一台接收连接，另一台搜索在线主机并输入配对码；两端须互通。校园网隔离时，可使用共享目录中转或允许互通的独立热点。</p></details></div>`;
 }
 function syncProgressHTML(data) {
   const progress = data.progress || { label: "等待同步" };
@@ -1158,8 +1164,10 @@ async function syncPage() {
   );
 }
 async function openSyncSettings() {
-  const data = await api("sync");
+  const [data, connectivity] = await Promise.all([api("sync"), api("connectivity")]);
   const settings = data.settings;
+  const interfaces = [...connectivity.interfaces, { address: "127.0.0.1", name: "仅本机" }];
+  let discovered = [];
   const mode = settings.mode || "webdav";
   const modeOptions = [
     ["webdav", "WebDAV：坚果云 / 其他服务"],
@@ -1190,7 +1198,10 @@ async function openSyncSettings() {
         values.port = Number(form.get("sync_port"));
       } else {
         const raw = String(form.get("sync_pairing") || "").trim();
+        const peer = discovered.find((item) => item.url === form.get("sync_peer"));
+        const code = String(form.get("sync_pairing_code") || "").trim();
         if (raw) {
+          if (code) throw new Error("请只填写配对码或手动配对信息中的一项。");
           try {
             values.pairing = JSON.parse(raw);
           } catch {
@@ -1198,6 +1209,10 @@ async function openSyncSettings() {
               "配对信息不是有效的 JSON，请完整复制另一台电脑显示的信息。",
             );
           }
+        } else if (code || settings.mode !== "lan-client") {
+          if (!peer || !code) throw new Error("请选择在线主机并填写接收电脑显示的配对码。");
+          values.discovered_peer = peer;
+          values.pairing_code = code;
         }
       }
       await api("sync/configure", {
@@ -1210,6 +1225,35 @@ async function openSyncSettings() {
     },
     { wide: true, label: "保存并开启同步", kicker: "覆盖所有工作空间" },
   );
+  const searchHosts = async () => {
+    const select = $("sync-peer");
+    const status = $("sync-search-status");
+    const search = $("sync-search");
+    search.disabled = true;
+    status.textContent = "正在搜索局域网内的同步主机…";
+    try {
+      const data = await api("sync/action", {
+        method: "POST",
+        body: JSON.stringify({ action: "discover" }),
+      });
+      if (!select.isConnected) return;
+      const previous = select.value;
+      discovered = data.items;
+      select.replaceChildren(new Option("请选择在线主机", ""));
+      for (const item of discovered)
+        select.add(new Option(`${item.hostname || "同步主机"} · ${new URL(item.url).host}${item.proof ? "" : "（等待显示配对码）"}`, item.url));
+      select.value = discovered.some((item) => item.url === previous)
+        ? previous
+        : discovered.length === 1 ? discovered[0].url : "";
+      status.textContent = discovered.length
+        ? `找到 ${discovered.length} 台在线主机。`
+        : "未发现在线主机。请确认接收电脑已开启同步，并与本机处于同一局域网。";
+    } catch (error) {
+      if (select.isConnected) status.textContent = errorText(error);
+    } finally {
+      search.disabled = false;
+    }
+  };
   const fields = () => {
     const selected = $("sync-mode").value;
     $("sync-mode-fields").innerHTML =
@@ -1222,15 +1266,21 @@ async function openSyncSettings() {
         : selected === "webdav"
           ? `<div class="form-grid sync-webdav-fields">${field("sync_webdav_url", "WebDAV 服务地址", settings.webdav_url || "https://dav.jianguoyun.com/dav/", { type: "url", required: true, wide: true, hint: "坚果云使用上方默认地址；其他 WebDAV 服务须填写 HTTPS 地址。" })}${field("sync_webdav_username", "WebDAV 账号", settings.webdav_username || "", { required: true, hint: "坚果云填写账号邮箱。" })}${field("sync_webdav_password", "第三方应用密码", "", { type: "password", hint: settings.webdav_password_saved ? "已保存；地址和账号相同时留空沿用。更换账号或地址请重新填写。" : "在坚果云「账户信息 → 安全选项 → 第三方应用管理」生成，请勿填写登录密码。" })}${field("sync_webdav_folder", "云端同步目录", settings.webdav_folder || "ExpVault", { required: true, wide: true, hint: "两台电脑填写同一专用目录，例如 ExpVault 或 科研/实验同步；程序在其中保存同步历史。" })}<p class="field-hint wide">无需安装坚果云客户端。应用密码保存在本机，不进入同步资料或日志。坚果云默认每 300 秒检查，保存连接与首次同步可能需要等待。</p></div>`
         : selected === "lan-host"
-          ? `<div class="form-grid">${field("sync_host", "本机网卡 IPv4 地址", settings.host || "", { required: true, hint: "填写两台电脑可互通的网卡地址，例如热点地址。" })}${field("sync_port", "直连服务端口", settings.port || 8766, { type: "number", required: true })}</div>`
-          : field("sync_pairing", "另一台电脑的配对信息", "", {
+          ? `<div class="form-grid"><div class="form-field"><label for="sync-host">本机网卡 IPv4 地址 *</label><select id="sync-host" name="sync_host" required aria-describedby="sync-host-hint"><option value="">请选择网卡</option>${interfaces.map((item) => `<option value="${e(item.address)}" ${item.address === (settings.host || connectivity.interfaces[0]?.address) ? "selected" : ""}>${e(item.name)} · ${e(item.address)}</option>`).join("")}</select><p class="field-hint" id="sync-host-hint">请选择两台电脑可以互通的网卡，例如 Wi-Fi、有线或热点网卡。</p></div>${field("sync_port", "直连服务端口", settings.port || 8766, { type: "number", required: true })}</div>`
+          : `<div class="form-grid"><div class="form-field"><label for="sync-peer">在线同步主机</label><select id="sync-peer" name="sync_peer" aria-describedby="sync-search-status"><option value="">请选择在线主机</option></select></div>${field("sync_pairing_code", "一次性配对码", "", { hint: "在接收电脑的同步页面点击「显示配对信息」，输入显示的配对码。" })}<div class="wide"><button type="button" id="sync-search" class="button">${icon("refresh")}重新搜索</button><p class="field-hint" id="sync-search-status" role="status"></p></div></div><details class="sync-help"><summary>手动配对</summary>${field("sync_pairing", "另一台电脑的配对信息", "", {
               type: "textarea",
               wide: true,
               hint:
                 settings.mode === "lan-client"
-                  ? `已连接 ${settings.peer_url}；留空沿用配对信息。`
-                  : "先在另一台电脑选择“本机接收连接”，再复制其完整配对信息。",
-            });
+                  ? `当前连接 ${settings.peer_url}。配对码和手动配对均留空时沿用当前连接。`
+                  : "支持旧版本电脑，或局域网广播不可用时使用。请复制接收电脑显示的完整配对信息。",
+            })}</details>`;
+    if (selected === "lan-client") {
+      discovered = [];
+      $("sync-search").addEventListener("click", searchHosts);
+      $("field-sync_pairing_code").autocomplete = "one-time-code";
+      searchHosts();
+    }
     const interval = $("field-sync_interval");
     interval.min = selected === "webdav" ? 60 : 5;
     if (selected === "webdav" && Number(interval.value) < 60)
@@ -1283,6 +1333,25 @@ async function openSyncConflict(id) {
   );
 }
 let syncRefreshInFlight = false;
+const syncPanelMarkup = new WeakMap();
+function updateSyncPanel(id, render, data) {
+  const panel = $(id);
+  // Polling should retain scroll anchors and any controls the reader is using.
+  const markup = render(data);
+  if (syncPanelMarkup.get(panel) === markup) return;
+  const active = document.activeElement;
+  const action = panel.contains(active) && active.dataset.action;
+  const helpFocused = active === panel.querySelector("summary");
+  const helpOpen = panel.querySelector("details")?.open;
+  panel.innerHTML = markup;
+  if (helpOpen) panel.querySelector("details")?.setAttribute("open", "");
+  if (helpFocused) panel.querySelector("summary")?.focus({ preventScroll: true });
+  if (action)
+    [...panel.querySelectorAll("[data-action]")].find((node) =>
+      node.dataset.action === action && node.dataset.id === active.dataset.id
+    )?.focus({ preventScroll: true });
+  syncPanelMarkup.set(panel, markup);
+}
 async function refreshSync() {
   if (syncRefreshInFlight) return;
   syncRefreshInFlight = true;
@@ -1296,10 +1365,10 @@ async function refreshSync() {
       count.hidden = !data.pending_count;
     }
     if (state.view === "sync" && !state.dialog && $("sync-status-panel")) {
-      $("sync-status-panel").innerHTML = syncStatusHTML(data);
-      $("sync-conflicts-panel").innerHTML = syncConflictsHTML(data);
-      $("sync-connection-panel").innerHTML = syncConnectionHTML(data);
-      $("sync-progress-panel").innerHTML = syncProgressHTML(data);
+      updateSyncPanel("sync-status-panel", syncStatusHTML, data);
+      updateSyncPanel("sync-conflicts-panel", syncConflictsHTML, data);
+      updateSyncPanel("sync-connection-panel", syncConnectionHTML, data);
+      updateSyncPanel("sync-progress-panel", syncProgressHTML, data);
       const logs = $("sync-log-list");
       const latest = String(data.logs.items[0]?.id || 0);
       const selection = window.getSelection();
@@ -2736,6 +2805,7 @@ async function openImport(showPhone = false) {
       <details id="phone-panel" class="transfer-method">
         <summary>手机扫码传入 <span>校园网可切换电脑热点</span></summary>
         <p class="field-hint">同一校园网也可能无法互通。建议先连电脑热点，再扫描资料二维码；保持手机屏幕点亮。</p>
+        ${state.session.storage?.mode === "writer" ? '<p class="field-hint">手机扫码后可选择直传到 NAS 的当前实验，或先发送到电脑暂存。</p>' : ""}
         <div id="phone-controls"><p class="field-hint">正在读取电脑网卡…</p></div>
         <p id="phone-error" class="error-text" role="status" hidden></p>
         <div id="phone-codes" class="phone-codes"></div>
@@ -3235,13 +3305,12 @@ document.addEventListener("click", async (event) => {
       });
       await refreshSync();
     } else if (action === "sync-pairing") {
-      const pairing = await api("sync/action", {
-        method: "POST",
-        body: JSON.stringify({ action: "pairing" }),
-      });
+      const [invite, pairing] = await Promise.all(["pairing-code", "pairing"].map((action) =>
+        api("sync/action", { method: "POST", body: JSON.stringify({ action }) })
+      ));
       openDialog(
         "局域网同步配对信息",
-        `<p class="prose">在另一台电脑的同步设置中选择“连接另一电脑”，粘贴以下完整信息。</p><textarea class="sync-pairing-code" rows="7" readonly aria-label="局域网同步配对信息">${e(JSON.stringify(pairing, null, 2))}</textarea><p class="field-hint">这份信息包含同步密钥，可访问所有同步实验资料，请只交给可信电脑。地址变化后需更新配对信息。</p>`,
+        `${invite.code ? `<p class="prose">在另一台电脑的同步设置中选择「连接另一电脑」，从在线主机中选择本机并输入以下配对码。</p><p><strong class="mono" id="sync-invite-code">${e(invite.code)}</strong></p><p class="field-hint">配对码有效期 5 分钟，仅可使用一次。每次重新打开此窗口都会生成新配对码。</p>` : '<p class="field-hint">局域网发现端口不可用。请使用手动配对。</p>'}<details class="sync-help"><summary>手动配对</summary><p class="field-hint">这份信息包含同步密钥，请只交给可信电脑。</p><textarea class="sync-pairing-code" rows="7" readonly aria-label="局域网同步配对信息">${e(JSON.stringify(pairing, null, 2))}</textarea></details>`,
         null,
         { wide: true },
       );
@@ -3323,7 +3392,7 @@ document.addEventListener("click", async (event) => {
       applyNASReadOnly();
       $("experiment-parameters")
         .querySelector('[data-action="toggle-parameters"]')
-        ?.focus();
+        ?.focus({ preventScroll: true });
     } else if (action === "close-dialog") closeDialog();
     else if (action === "add-instrument") await openInstrumentEditor();
     else if (action === "edit-instrument")

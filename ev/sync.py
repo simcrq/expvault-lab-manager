@@ -23,6 +23,7 @@ from .file_tags import normalize_tags
 from .measurements import normalize as normalize_measurements
 from .sync_merge import encoded, digest, merge_states, normalize_state, choose_conflict
 from .sync_transport import Repository, HTTPSRepository, LANServer, MAX_COMMIT, HEX, CHUNK
+from .sync_discovery import discover
 from .sync_activity import SyncActivity
 from .sync_transport import machine_name
 from .sync_webdav import WebDAVRepository, WebDAVError, coordinates, device_id, DEFAULT_URL
@@ -405,7 +406,7 @@ class SyncEngine:
             target.unlink(missing_ok=True)
             return
         target.parent.mkdir(parents=True, exist_ok=True)
-        temporary = target.with_name("." + target.name + "-sync-" + uuid.uuid4().hex + ".part")
+        temporary = target.with_name(".expvault-" + uuid.uuid4().hex + ".part")
         try:
             with self.cache.path("objects", key).open("rb") as source, temporary.open("xb") as stream:
                 hasher = hashlib.sha256()
@@ -793,7 +794,7 @@ class SyncCoordinator:
         raise ValueError("请先配置同步方式")
 
     def configure(self, values):
-        allowed = {"mode","folder","host","port","pairing","interval","include_photos","include_videos","photo_limit_mb",
+        allowed = {"mode","folder","host","port","pairing","discovered_peer","pairing_code","interval","include_photos","include_videos","photo_limit_mb",
                    "webdav_url","webdav_username","webdav_password","webdav_folder"}
         if not isinstance(values, dict) or set(values)-allowed:
             raise ValueError("同步配置字段无效")
@@ -801,6 +802,9 @@ class SyncCoordinator:
         interval, limit = values.get("interval",300 if mode == "webdav" else 30), values.get("photo_limit_mb",0)
         if mode not in ("folder","lan-host","lan-client","webdav") or type(interval) is not int or not 5 <= interval <= 3600:
             raise ValueError("请选择同步方式，自动同步间隔为 5–3600 秒")
+        if ("discovered_peer" in values or "pairing_code" in values) and (
+                mode != "lan-client" or "pairing" in values or not {"discovered_peer", "pairing_code"} <= values.keys()):
+            raise ValueError("请选择一种局域网配对方式")
         if mode == "webdav" and interval < 60:
             raise ValueError("WebDAV 自动检查间隔至少 60 秒，坚果云建议使用 300 秒或更长")
         if type(limit) not in (int,float) or not 0 <= limit <= 100000 or any(not isinstance(values.get(key,True),bool) for key in ("include_photos","include_videos")):
@@ -839,6 +843,9 @@ class SyncCoordinator:
             settings.update(host=host, port=port, token=token or secrets.token_urlsafe(32))
         elif mode == "lan-client":
             pairing = values.get("pairing", self.settings.get("pairing") if self.settings.get("mode") == mode else None)
+            if "discovered_peer" in values:
+                from .sync_transport import redeem_invite
+                pairing = redeem_invite(values["discovered_peer"], values["pairing_code"])
             if not isinstance(pairing, dict) or set(pairing) != {"url","token","fingerprint"}:
                 raise ValueError("请粘贴另一台电脑提供的完整配对信息")
             HTTPSRepository(**pairing)
@@ -940,14 +947,18 @@ class SyncCoordinator:
     def action(self, action, **values):
         if action != "resolve" and values:
             raise ValueError("同步操作包含多余字段")
-        if action == "pairing":
-            with self.work_lock:
+        if action == "discover":
+            with self.guard:
+                own_url = self.server.pairing()["url"] if self.server else ""
+            return {"items": discover(exclude=own_url)}
+        if action in ("pairing", "pairing-code"):
+            with self.guard:
                 if self.settings.get("mode") != "lan-host":
                     raise ValueError("请先配置为局域网直连的接收电脑")
                 if not self.settings.get("enabled"):
                     raise ValueError("请先恢复自动同步，再显示配对信息")
-                self.transport()
-                return self.server.pairing()
+                self._transport()
+                return self.server.new_invite() if action == "pairing-code" else self.server.pairing()
         if not self.settings.get("mode"):
             raise ValueError("请先配置同步")
         with self.guard:

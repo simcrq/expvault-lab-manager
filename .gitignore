@@ -60,6 +60,7 @@
 !/ev/steps.py
 !/ev/sync.py
 !/ev/sync_activity.py
+!/ev/sync_discovery.py
 !/ev/sync_merge.py
 !/ev/sync_transport.py
 !/ev/sync_webdav.py

@@ -5,6 +5,7 @@ import secrets
 import sys
 import threading
 import time
+from functools import partial
 
 from . import network
 from .phone_import import PhoneReceiver
@@ -78,7 +79,9 @@ class WebPairing:
                 with pair["counter_lock"]:
                     pair["received"] += 1
             receiver = PhoneReceiver(self.service.inbox, record["title"], host=host, exp_id=exp_id,
-                                     workspace_name=self.workspace_name, on_received=received).start()
+                                     workspace_name=self.workspace_name, on_received=received,
+                                     direct_import=partial(self.service.import_phone_file, exp_id)
+                                     if self.service.nas_mode == "writer" else None).start()
             pair["receiver"] = receiver
             self.receivers[pair_id] = pair
             return self.info(pair_id)

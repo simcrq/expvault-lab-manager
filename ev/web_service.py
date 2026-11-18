@@ -360,6 +360,16 @@ class WebService:
                 continue
         return result
 
+    def import_phone_file(self, exp_id, item, cancel):
+        if self.nas_mode != "writer":
+            raise WebError("请在 NAS 编辑主机上开启扫码传入", status=403)
+        self.require_write()
+        result = import_items(self.root, exp_id, [item], cancel=cancel)
+        if not (result["imported"] or result["duplicates"]):
+            raise WebError("文件未能导入 NAS")
+        with self.context() as ctx:
+            nas.publish_checksums(ctx)
+
     def submit(self, request_id, operation, arguments):
         if operation not in ("reports.export", "experiments.verify"):
             self.require_write()
