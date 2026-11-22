@@ -297,6 +297,11 @@ class WebServer:
                     self.respond(200, owner.pairing.connectivity(local=self.local_controls()))
                 elif url.path == "/api/pairings":
                     self.respond(200, owner.pairing.info(query.get("id", "")))
+                elif url.path == "/api/mcp/config":
+                    if not self.local_controls():
+                        raise WebError("请在本机浏览器查看 MCP 接入配置", status=403)
+                    from .mcp_server import client_config
+                    self.respond(200, client_config(owner.service.root, http_url=f"http://{owner.host}:{owner.port}"))
                 elif url.path.startswith("/api/"):
                     self.respond(200, owner.service.read(url.path[5:], query))
                 else:
@@ -418,6 +423,17 @@ class WebServer:
                     if set(value) != {"id"} or not isinstance(value["id"], str):
                         raise WebError("手机接收会话字段无效")
                     self.respond(200, owner.pairing.stop(value["id"]))
+                elif url.path == "/api/mcp":
+                    if not self.local_controls():
+                        raise WebError("MCP 接口仅允许本机访问", status=403)
+                    from .mcp_server import MCPServer
+                    reply = MCPServer(owner.service.root, nas_mode=owner.service.nas_mode).handle_message(value)
+                    if reply is None:
+                        self.send_response(204)
+                        self.headers_common()
+                        self.end_headers()
+                    else:
+                        self.respond(200, reply)
                 elif url.path == "/api/actions":
                     if set(value) != {"request_id", "operation", "arguments"}:
                         raise WebError("请求字段无效")

@@ -9,7 +9,7 @@ from pathlib import Path
 from . import nas
 from .nas_libraries import Connections
 
-READ_COMMANDS={"list","ls","show","search","stats","current","ids","id","open","steps","snapshots","targets","issues","export","use","web","verify","doctor"}
+READ_COMMANDS={"list","ls","show","search","stats","current","ids","id","open","steps","snapshots","targets","issues","export","export-conditions","use","web","mcp","verify","doctor"}
 
 
 def main(argv=None):

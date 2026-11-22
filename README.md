@@ -20,7 +20,7 @@ Windows 安装时勾选 **Add Python to PATH**，并保留 Python Launcher。无
 
 ### 2. 解压程序
 
-下载 [expvault-lab-manager-1.9.5.zip](https://github.com/simcrq/expvault-lab-manager/releases/download/v1.9.5/expvault-lab-manager-1.9.5.zip)，然后**完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
+下载 [expvault-lab-manager-1.9.6.zip](https://github.com/simcrq/expvault-lab-manager/releases/download/v1.9.6/expvault-lab-manager-1.9.6.zip)，然后**完整解压**到可写文件夹，例如桌面或个人文档目录。不要在 ZIP 中直接运行，不要放入 Windows 的 Program Files。
 
 如果拿到的是源码目录，也可以使用，启动文件与独立包有所不同：
 
@@ -76,6 +76,8 @@ Windows 安装时勾选 **Add Python to PATH**，并保留 Python Launcher。无
 - **批量矩阵与一键复制参数**：点击「批量矩阵」可在当前实验内按参数组合一次生成最多 60 组条件块；单张卡片点击「复制」可直接复用参数键值、微调单个变量快速新建下一组。
 - **一键标记评估状态**：每张卡片右上角可直接切换「待测 / 调试中 / 合格 / ★最优 / 失败」，顶部色条同步标识，首页卡片也会直接突出显示 `★ 最优` 条件。
 - **增强图片灯箱**：点击任意卡片主图放大查看，支持键盘 `←` / `→` 切图、`Z` 键缩放、开启「**跨条件连播**」连续对比不同参数下的图像，并可随时编辑图片说明或设为封面图。
+- **一键导出工艺条件表格**：在工艺条件工具栏或并排对比窗口点击「**导出表格**」，可按全部 / 当前筛选 / 已勾选条件一键导出 **Excel（`.xlsx`，差异参数与指标分列着色）**、**CSV（`.csv`）** 或 **Markdown 表格**（支持直接复制到剪贴板）。
+- **AI / MCP 标准接口**：点击左侧栏「**AI / MCP 接口**」获取标准 `mcpServers` 配置，让 AI 助手直接检索实验、读写工艺条件矩阵、读取 CSV 数据与导出工艺表格，详见 [AI / MCP 指南](docs/mcp.md)。
 
 ![实验详情：同一实验内的工艺条件矩形块网格，自动高亮差异参数并直接展示多张实拍图与评估状态](docs/screenshots/experiment.png)
 

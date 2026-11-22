@@ -39,6 +39,7 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1", help="默认仅本机；局域网访问须指定私有 IPv4 地址")
     parser.add_argument("--port", type=int, default=0, help="默认自动分配空闲端口")
     parser.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    parser.add_argument("--mcp", action="store_true", help="以标准 MCP stdio 模式启动 AI 接口（不启动网页服务）")
     parser.add_argument("--check", action="store_true", help="检查程序完整性与依赖，不创建实验库")
     args = parser.parse_args(argv)
     if not (3, 10) <= sys.version_info[:2] <= (3, 13):
@@ -66,6 +67,9 @@ def main(argv=None):
         if args.nas or nas.is_nas(root) or nas.is_known_path(root):
             nas.assert_available(root)
             with nas.access(root, args.nas_mode):
+                if args.mcp:
+                    from ev.mcp_server import serve_stdio
+                    return serve_stdio(root, nas_mode=args.nas_mode)
                 return run(root, host=args.host, port=args.port, open_browser=not args.no_open, nas_mode=args.nas_mode)
         root.mkdir(parents=True, exist_ok=True)
         state = root / ".expvault"
@@ -75,9 +79,13 @@ def main(argv=None):
         with FileLock(str(state / "bootstrap.lock"), timeout=30):
             if not (root / config.CONFIG_NAME).exists():
                 config.init_repo(root, project="默认实验库")
-                print("已创建空实验库：" + str(root))
+                if not args.mcp:
+                    print("已创建空实验库：" + str(root))
             else:
                 config.load(root)
+        if args.mcp:
+            from ev.mcp_server import serve_stdio
+            return serve_stdio(root)
         print(f"实验管理系统 {version}；数据保存在：{root}")
         return run(root, host=args.host, port=args.port, open_browser=not args.no_open)
     except ModuleNotFoundError as exc:

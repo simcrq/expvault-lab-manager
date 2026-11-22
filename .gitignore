@@ -21,6 +21,7 @@
 !/docs/cli.md
 !/docs/groups.md
 !/docs/gui-import.md
+!/docs/mcp.md
 !/docs/nas.md
 !/docs/release.md
 !/docs/screenshots/conditions-compare.png
@@ -48,6 +49,7 @@
 !/ev/importer.py
 !/ev/issue.py
 !/ev/journal.py
+!/ev/mcp_server.py
 !/ev/measurements.py
 !/ev/nas.py
 !/ev/nas_cli.py

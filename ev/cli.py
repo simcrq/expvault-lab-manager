@@ -68,6 +68,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8765, help="服务端口，0 表示自动分配")
     s.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
 
+    sub.add_parser("mcp", help="启动标准 MCP (Model Context Protocol) stdio AI 接口服务")
+
+    s = sub.add_parser("export-conditions", help="导出单个实验的工艺条件表格（Excel / CSV / Markdown）")
+    s.add_argument("exp", help="实验编号（或前缀）")
+    s.add_argument("--format", choices=("xlsx", "csv", "md"), default="xlsx", help="导出格式（默认 xlsx）")
+    s.add_argument("-o", "--output", default="", help="输出文件路径（默认写入报告目录）")
+
 
     # init
     s = sub.add_parser("init", help="初始化数据仓库")
@@ -1303,6 +1310,32 @@ def cmd_web(args, con: Console) -> int:
     return run(Path(args.root) if args.root else config.find_root(), host=args.host, port=args.port, open_browser=not args.no_open)
 
 
+def cmd_mcp(args, con: Console) -> int:
+    from .mcp_server import serve_stdio
+
+    return serve_stdio(Path(args.root) if args.root else config.find_root())
+
+
+def cmd_export_conditions(args, con: Console) -> int:
+    from . import conditions as proc_conditions
+
+    ctx = config.load(Path(args.root) if args.root else None)
+    try:
+        rec = ctx.db.find_experiment(args.exp)
+        if not rec:
+            raise ValueError(f"找不到实验：{args.exp}")
+        out = Path(args.output) if args.output else None
+        res = proc_conditions.export_table(ctx, rec, args.format, output=out)
+        if con.json_mode:
+            con.emit({"path": str(res["path"]), "format": res["format"], "count": res["count"], "columns": res["columns"]})
+        else:
+            con.ok(f"已导出 {res['count']} 组工艺条件（{res['format'].upper()}）：{res['path']}")
+        return 0
+    finally:
+        if ctx._db is not None:
+            ctx.db.close()
+
+
 DISPATCH = {
     "init": cmd_init, "new": cmd_new, "add": cmd_add, "sync": cmd_sync,
     "list": cmd_list, "ls": cmd_list, "show": cmd_show, "edit": cmd_edit,
@@ -1316,6 +1349,7 @@ DISPATCH = {
     "enter": cmd_enter, "shell": cmd_enter, "work": cmd_enter,
     "use": cmd_use, "put": cmd_put, "scan": cmd_scan, "current": cmd_current,
     "rm": cmd_rm, "del": cmd_rm, "gui": cmd_gui, "web": cmd_web,
+    "mcp": cmd_mcp, "export-conditions": cmd_export_conditions,
 }
 
 

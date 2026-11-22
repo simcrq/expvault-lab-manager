@@ -532,3 +532,266 @@ def summary_html(conditions: list[dict] | None) -> str:
         + "".join(rows)
         + "</tbody></table></div>"
     )
+
+
+# --------------------------------------------------------------------------
+# Process Condition Table Export (Excel / CSV / Markdown)
+# --------------------------------------------------------------------------
+
+def analyze_conditions(items: list[dict]) -> dict:
+    """Identify varying parameters, shared parameters, and metric keys."""
+    key_order: list[str] = []
+    value_sets: dict[str, set[str]] = {}
+    metric_order: list[str] = []
+    for cond in items:
+        for k, v in (cond.get("params") or {}).items():
+            if k not in value_sets:
+                key_order.append(k)
+                value_sets[k] = set()
+            value_sets[k].add("" if v is None else str(v))
+        for k in (cond.get("metrics") or {}):
+            if k not in metric_order:
+                metric_order.append(k)
+    varying_keys: list[str] = []
+    shared_keys: list[str] = []
+    for k in key_order:
+        present = sum(1 for c in items if k in (c.get("params") or {}))
+        if len(value_sets[k]) > 1 or present < len(items):
+            varying_keys.append(k)
+        else:
+            shared_keys.append(k)
+    return {
+        "all_param_keys": key_order,
+        "varying_keys": varying_keys,
+        "shared_keys": shared_keys,
+        "metric_keys": metric_order,
+    }
+
+
+def _cell_str(value) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, (dict, list)):
+        import json
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def table_columns_and_rows(meta: dict, cond_ids: list[str] | None = None) -> tuple[list[str], list[list], dict]:
+    all_items = normalize(meta.get("process_conditions", []))
+    if cond_ids:
+        wanted = set(cond_ids)
+        by_id = {c["id"]: c for c in all_items}
+        # Respect provided order if valid, else preserve meta order
+        items = [by_id[cid] for cid in cond_ids if cid in by_id]
+        if not items:
+            items = [c for c in all_items if c["id"] in wanted]
+    else:
+        items = all_items
+
+    analysis = analyze_conditions(items)
+    param_cols = [*analysis["varying_keys"], *analysis["shared_keys"]]
+    metric_cols = analysis["metric_keys"]
+    headers = [
+        "序号",
+        "工艺条件",
+        "样品编号",
+        "状态",
+        *param_cols,
+        *metric_cols,
+        "图片数",
+        "图片文件",
+        "数据附件",
+        "观察备注",
+    ]
+    rows: list[list] = []
+    for idx, cond in enumerate(items, 1):
+        params = cond.get("params") or {}
+        metrics = cond.get("metrics") or {}
+        imgs = cond.get("images") or []
+        files = cond.get("files") or []
+        row = [
+            idx,
+            cond.get("name", ""),
+            cond.get("sample", ""),
+            CONDITION_STATUS_LABEL.get(cond.get("status", "pending"), cond.get("status", "")),
+            *[_cell_str(params.get(k, "")) for k in param_cols],
+            *[_cell_str(metrics.get(k, "")) for k in metric_cols],
+            len(imgs),
+            "; ".join(a.get("name") or Path(a.get("path", "")).name for a in imgs),
+            "; ".join(a.get("name") or Path(a.get("path", "")).name for a in files),
+            cond.get("note", ""),
+        ]
+        rows.append(row)
+    return headers, rows, analysis
+
+
+def export_markdown(meta: dict, cond_ids: list[str] | None = None) -> str:
+    headers, rows, _analysis = table_columns_and_rows(meta, cond_ids=cond_ids)
+
+    def esc(val) -> str:
+        return str(val if val is not None else "").replace("|", "\\|").replace("\r\n", " ").replace("\n", " ")
+
+    title = meta.get("title") or meta.get("id") or "工艺条件表"
+    lines = [
+        f"# {title} · 工艺条件表",
+        "",
+        f"- 实验编号：`{meta.get('id', '')}`  |  日期：{meta.get('date', '')}  |  样品：{meta.get('device', '') or '—'}  |  条件数：{len(rows)}",
+        "",
+    ]
+    if not rows:
+        lines.append("_暂无工艺条件记录_")
+        return "\n".join(lines) + "\n"
+    lines.append("| " + " | ".join(esc(h) for h in headers) + " |")
+    lines.append("| " + " | ".join("---" for _ in headers) + " |")
+    for row in rows:
+        lines.append("| " + " | ".join(esc(c) for c in row) + " |")
+    return "\n".join(lines) + "\n"
+
+
+def export_csv(meta: dict, path: Path, cond_ids: list[str] | None = None) -> Path:
+    import csv
+
+    headers, rows, _analysis = table_columns_and_rows(meta, cond_ids=cond_ids)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(headers)
+        for row in rows:
+            writer.writerow(row)
+    return path
+
+
+def export_xlsx(meta: dict, path: Path, cond_ids: list[str] | None = None) -> Path:
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        return export_csv(meta, path.with_suffix(".csv"), cond_ids=cond_ids)
+
+    headers, rows, analysis = table_columns_and_rows(meta, cond_ids=cond_ids)
+    varying_set = set(analysis["varying_keys"])
+    metric_set = set(analysis["metric_keys"])
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "工艺条件表"
+    ws.append(headers)
+    for row in rows:
+        ws.append(row)
+        for cell in ws[ws.max_row]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+
+    # Style header row
+    header_fill = PatternFill("solid", fgColor="1F3864")
+    varying_fill = PatternFill("solid", fgColor="1E4DB7")
+    metric_fill = PatternFill("solid", fgColor="146C43")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    thin = Side(style="thin", color="D9E2EC")
+    for col_idx, name in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = varying_fill if name in varying_set else (metric_fill if name in metric_set else header_fill)
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = Border(bottom=thin)
+    ws.freeze_panes = "A2"
+    ws.row_dimensions[1].height = 24
+    if ws.max_row >= 1 and len(headers) >= 1:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+
+    # Highlight status rows subtly
+    status_fills = {
+        "最优": PatternFill("solid", fgColor="FFF4D6"),
+        "合格": PatternFill("solid", fgColor="E9F7EF"),
+        "失败": PatternFill("solid", fgColor="FDECEC"),
+    }
+    for row_idx in range(2, ws.max_row + 1):
+        st_val = ws.cell(row=row_idx, column=4).value
+        if st_val in status_fills:
+            ws.cell(row=row_idx, column=4).fill = status_fills[st_val]
+
+    # Auto-size columns reasonably
+    for col_idx, name in enumerate(headers, start=1):
+        max_len = len(str(name))
+        for row_idx in range(2, min(ws.max_row + 1, 200)):
+            val = ws.cell(row=row_idx, column=col_idx).value
+            if val is not None:
+                max_len = max(max_len, min(42, len(str(val))))
+        width = max(8, min(44, int(max_len * 1.45) + 4))
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # Sheet 2: Experiment overview & baseline params
+    ws_info = wb.create_sheet("实验信息与基准参数")
+    ws_info.append(["字段", "内容"])
+    for label, val in (
+        ("实验编号", meta.get("id", "")),
+        ("实验标题", meta.get("title", "")),
+        ("实验日期", meta.get("date", "")),
+        ("器件 / 样品", meta.get("device", "")),
+        ("工艺批次", meta.get("batch", "")),
+        ("操作人", meta.get("operator", "")),
+        ("所属课题", meta.get("project", "")),
+        ("状态", ex.STATUS_LABEL.get(meta.get("status", ""), meta.get("status", ""))),
+        ("导出条件数", len(rows)),
+    ):
+        ws_info.append([label, val])
+    base_params = meta.get("params") or {}
+    if base_params:
+        ws_info.append(["", ""])
+        ws_info.append(["公共基准参数", "数值"])
+        for k, v in base_params.items():
+            ws_info.append([str(k), _cell_str(v)])
+    for row_idx in range(2, ws_info.max_row + 1):
+        for cell in ws_info[row_idx]:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+    for col_idx in (1, 2):
+        cell = ws_info.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+    ws_info.column_dimensions["A"].width = 22
+    ws_info.column_dimensions["B"].width = 48
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return path
+
+
+def export_table(ctx, rec: dict, fmt: str = "xlsx", *, output: Path | None = None,
+                 cond_ids: list[str] | None = None) -> dict:
+    fmt = (fmt or "xlsx").lower()
+    if fmt == "markdown":
+        fmt = "md"
+    if fmt not in ("xlsx", "csv", "md"):
+        raise ValueError("导出格式仅支持 xlsx、csv 或 md")
+    folder = ex.exp_dir(ctx, rec)
+    meta = ex.load_meta(folder)
+    if not meta or meta.get("id") != rec["id"]:
+        raise ValueError("实验元数据缺失或编号不匹配")
+    headers, rows, analysis = table_columns_and_rows(meta, cond_ids=cond_ids)
+    if not rows:
+        raise ValueError("当前没有可导出的工艺条件")
+    md_text = export_markdown(meta, cond_ids=cond_ids)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    stem = f"conditions-{rec['id']}-{stamp}"
+    target = Path(output) if output else (ctx.report_dir / f"{stem}.{fmt}")
+    if fmt == "xlsx":
+        written = export_xlsx(meta, target, cond_ids=cond_ids)
+    elif fmt == "csv":
+        written = export_csv(meta, target, cond_ids=cond_ids)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(md_text, encoding="utf-8", newline="\n")
+        written = target
+    actual_fmt = written.suffix.lstrip(".").lower()
+    return {
+        "path": written,
+        "name": written.name,
+        "format": actual_fmt,
+        "count": len(rows),
+        "columns": headers,
+        "varying_keys": analysis["varying_keys"],
+        "markdown": md_text,
+    }

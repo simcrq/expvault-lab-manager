@@ -210,6 +210,7 @@ const operationNames = {
   "conditions.image": "更新条件图片信息",
   "conditions.reorder": "调整工艺条件顺序",
   "conditions.delete": "删除工艺条件",
+  "conditions.export": "导出工艺条件表格",
 };
 const eventNames = {
   from_template: "由模板创建",
@@ -1348,6 +1349,14 @@ function conditionsSection(meta) {
           .join("")}</div>`
     : `<section class="panel">${empty("没有匹配的工艺条件", "清空筛选词或切换状态即可查看全部条件。", '<button type="button" class="button" data-action="condition-reset-filters">显示全部条件</button>')}</section>`;
 
+  const exportScopeLabel =
+    compareCount > 0
+      ? `已选 ${compareCount} 组`
+      : list.length < all.length
+        ? `当前筛选 ${list.length} 组`
+        : `全部 ${all.length} 组`;
+  const exportMenu = `<details class="experiment-reuse cond-export-menu"><summary class="button small">${icon("export")}导出表格</summary><div class="reuse-menu"><p class="cond-export-scope">导出范围：<strong>${exportScopeLabel}</strong></p>${button("condition-export-xlsx", "导出 Excel (.xlsx)", "download")}${button("condition-export-csv", "导出 CSV (.csv)", "download")}${button("condition-export-md", "导出 Markdown (.md)", "download")}${button("condition-copy-md", "复制 Markdown 表格", "copy")}</div></details>`;
+
   return `${baselineBar}
   <div class="cond-toolbar">
     <div class="cond-toolbar-row">
@@ -1355,6 +1364,7 @@ function conditionsSection(meta) {
       <div class="cond-toolbar-actions">
         <button type="button" class="button small ${compareCount >= 2 ? "primary" : ""}" id="cond-compare-btn" data-action="compare-conditions" ${compareCount < 2 ? "disabled" : ""} title="勾选 2–4 个条件卡片并排对比">${icon("compare")}并排对比${compareCount ? ` (${compareCount})` : ""}</button>
         ${compareCount ? '<button type="button" class="text-button" data-action="clear-cond-compare">清空勾选</button>' : ""}
+        ${exportMenu}
         ${button("batch-conditions", "批量矩阵", "sparkles")}
         ${button("add-condition", "添加条件", "plus", "", true)}
       </div>
@@ -3171,7 +3181,8 @@ function openConditionCompare() {
 
   openDialog(
     `并排对照 · ${selected.length} 组工艺条件`,
-    `<div class="compare-table-wrap"><table class="compare-table"><thead><tr><th>参数 / 指标</th>${selected
+    `<div class="toolbar compare-export-bar"><span class="muted">可将当前对比的 ${selected.length} 组条件直接导出为表格</span><div class="toolbar-group"><button type="button" class="button small" data-compare-export="xlsx">${icon("download")}导出 Excel</button><button type="button" class="button small" data-compare-export="csv">${icon("download")}导出 CSV</button><button type="button" class="button small" data-compare-export="copy-md">${icon("copy")}复制 Markdown</button></div></div>
+    <div class="compare-table-wrap"><table class="compare-table"><thead><tr><th>参数 / 指标</th>${selected
       .map(
         (c) =>
           `<th><strong>${scientificHTML(c.name)}</strong>${c.sample ? `<small>${scientificHTML(c.sample)}</small>` : ""}</th>`,
@@ -3191,7 +3202,19 @@ function openConditionCompare() {
 
   $("dialog-content").addEventListener(
     "click",
-    (event) => {
+    async (event) => {
+      const expBtn = event.target.closest("[data-compare-export]");
+      if (expBtn) {
+        const mode = expBtn.dataset.compareExport;
+        const ids = selected.map((c) => c.id);
+        try {
+          if (mode === "copy-md") await exportConditionsTable("md", { condIds: ids, copyOnly: true });
+          else await exportConditionsTable(mode, { condIds: ids });
+        } catch (error) {
+          toast(errorText(error), true);
+        }
+        return;
+      }
       const thumb = event.target.closest("[data-compare-thumb]");
       if (thumb) {
         activeImgIdx.set(thumb.dataset.compareThumb, Number(thumb.dataset.index));
@@ -3406,6 +3429,75 @@ function openConditionLightbox(condId, imgIndex = 0) {
   }, { signal: ac.signal });
 
   render();
+}
+async function exportConditionsTable(format, { condIds = null, copyOnly = false } = {}) {
+  if (!state.meta || !state.expId) return;
+  let targetIds = condIds;
+  if (!targetIds) {
+    if (state.condCompare.size > 0) {
+      targetIds = (state.meta.process_conditions || [])
+        .filter((c) => state.condCompare.has(c.id))
+        .map((c) => c.id);
+    } else {
+      const { all, list } = filteredSortedConditions(state.meta);
+      if (list.length < all.length) targetIds = list.map((c) => c.id);
+    }
+  }
+  const args = { exp_id: state.expId, format };
+  if (targetIds && targetIds.length) args.cond_ids = targetIds;
+  const result = await runAction("conditions.export", args);
+  if (copyOnly) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(result.markdown || "");
+      toast(`已复制 ${result.count} 组工艺条件的 Markdown 表格到剪贴板`);
+    } else {
+      openDialog(
+        "工艺条件 Markdown 表格",
+        `<textarea class="sync-pairing-code" rows="12" readonly aria-label="Markdown 表格">${e(result.markdown || "")}</textarea>`,
+        null,
+        { wide: true, kicker: "复制表格" },
+      );
+    }
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = result.url;
+  link.download = result.name;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  toast(`已导出 ${result.count} 组工艺条件（${result.name}）`);
+}
+async function openMCPDialog() {
+  const data = await api("mcp/config");
+  const jsonConfig = JSON.stringify(data.stdio_config, null, 2);
+  const rows = (data.tools || [])
+    .map(
+      (t) =>
+        `<tr><td class="mono">${e(t.name)}</td><td><span class="badge ${t.read_only ? "done" : "running"}">${t.read_only ? "只读" : "读写"}</span></td><td>${e(t.description)}</td></tr>`,
+    )
+    .join("");
+  openDialog(
+    "AI / MCP 标准接口",
+    `<div class="alert">${icon("info")}expvault 内置标准 Model Context Protocol（JSON-RPC 2.0）接口，支持直接接入 Antigravity、Claude Desktop、Cursor、VS Code 或 Gemini CLI。所有写入通过 <code>harness.lock</code> 串行保护，并遵守 NAS 只读限制。</div>
+    <div class="form-divider">方式一：标准 Stdio MCP 客户端配置（推荐）</div>
+    <p class="field-hint">将下方配置复制到你的 AI 工具 MCP 配置文件中，即可直接读写当前实验库（<code>${e(data.root)}</code>）：</p>
+    <textarea id="mcp-config-text" class="sync-pairing-code" rows="10" readonly aria-label="MCP 客户端配置 JSON">${e(jsonConfig)}</textarea>
+    <div class="toolbar-group mcp-copy-bar"><button type="button" class="button small primary" id="mcp-copy-config">${icon("copy")}复制 MCP 配置 JSON</button><span class="field-hint">HTTP 接口：<code>POST ${e(data.http_endpoint)}</code>（需本机与当前会话认证）</span></div>
+    <div class="form-divider">已开放的 MCP 工具（共 ${(data.tools || []).length} 项）</div>
+    <div class="table-wrap mcp-tools-wrap"><table><thead><tr><th>工具名称</th><th>权限</th><th>功能说明</th></tr></thead><tbody>${rows}</tbody></table></div>`,
+    null,
+    { wide: true, kicker: `MCP ${data.server?.version || ""}` },
+  );
+  $("mcp-copy-config")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(jsonConfig);
+      toast("已复制 MCP 配置 JSON 到剪贴板");
+    } catch {
+      $("mcp-config-text")?.select();
+      toast("请按 Ctrl+C 复制已选中的配置");
+    }
+  });
 }
 async function openQuickFindingsEditor() {
   const meta = await api("experiment?" + query({ exp_id: state.expId }));
@@ -4937,7 +5029,7 @@ function watchJob(job) {
 async function runAction(operation, args) {
   if (
     nasReadOnly() &&
-    !["reports.export", "experiments.verify", "backup.restore"].includes(operation)
+    !["reports.export", "conditions.export", "experiments.verify", "backup.restore"].includes(operation)
   )
     throw new Error("NAS 当前为只读连接，请在编辑主机修改");
   const requestId = uuid();
@@ -5066,6 +5158,7 @@ document.addEventListener("click", async (event) => {
     if (nasReadOnly() && nasWriteActions.has(action))
       throw new Error("NAS 当前为只读连接，请在编辑主机修改");
     if (action === "nas-libraries") await openNASLibraries();
+    else if (action === "mcp-info") await openMCPDialog();
     else if (action === "nas-connect") openNASConnector();
     else if (action === "nas-open")
       await enterNAS({
@@ -5326,6 +5419,18 @@ document.addEventListener("click", async (event) => {
     } else if (action === "clear-cond-compare") {
       state.condCompare.clear();
       refreshConditionsView();
+    } else if (action === "condition-export-xlsx") {
+      document.querySelectorAll(".cond-export-menu[open]").forEach((el) => (el.open = false));
+      await exportConditionsTable("xlsx");
+    } else if (action === "condition-export-csv") {
+      document.querySelectorAll(".cond-export-menu[open]").forEach((el) => (el.open = false));
+      await exportConditionsTable("csv");
+    } else if (action === "condition-export-md") {
+      document.querySelectorAll(".cond-export-menu[open]").forEach((el) => (el.open = false));
+      await exportConditionsTable("md");
+    } else if (action === "condition-copy-md") {
+      document.querySelectorAll(".cond-export-menu[open]").forEach((el) => (el.open = false));
+      await exportConditionsTable("md", { copyOnly: true });
     } else if (
       action === "condition-move-prev" ||
       action === "condition-move-next"

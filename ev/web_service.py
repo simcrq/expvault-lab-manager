@@ -111,6 +111,7 @@ SCHEMAS = {
     "conditions.image": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID, "path": {"type": "string", "minLength": 1, "maxLength": 4096}, "caption": {"type": "string", "maxLength": 512}, "set_cover": {"type": "boolean"}}, ["exp_id", "cond_id", "path"]),
     "conditions.reorder": obj({**EXPERIMENT, **REVISION, "order": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": True, "items": COND_ID}}, ["exp_id", "order"]),
     "conditions.delete": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID}, ["exp_id", "cond_id"]),
+    "conditions.export": obj({**EXPERIMENT, "format": {"enum": ["xlsx", "csv", "md"]}, "cond_ids": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": True, "items": COND_ID}}, ["exp_id", "format"]),
 }
 VALIDATORS = {name: Draft202012Validator(schema, format_checker=FormatChecker()) for name, schema in SCHEMAS.items()}
 
@@ -468,7 +469,7 @@ class WebService:
             nas.publish_checksums(ctx)
 
     def submit(self, request_id, operation, arguments):
-        if operation not in ("reports.export", "experiments.verify", "backup.restore"):
+        if operation not in ("reports.export", "conditions.export", "experiments.verify", "backup.restore"):
             self.require_write()
         transaction = getattr(self, "sync_root", self.root)/".expvault/sync/transaction.json"
         pending = read_json(transaction, None)
@@ -529,7 +530,7 @@ class WebService:
                 job.update(progress=min(99, int(done*100/max(total, 1))), message=message)
                 write_json(path, job)
         try:
-            if job["operation"] not in ("reports.export", "experiments.verify", "backup.restore"):
+            if job["operation"] not in ("reports.export", "conditions.export", "experiments.verify", "backup.restore"):
                 self.require_write()
             job.update(status="running", message="正在执行", started_at=now_iso())
             write_json(path, job)
@@ -770,6 +771,15 @@ class WebService:
             proc_conditions.reorder(ctx, rec, args["order"])
         elif operation == "conditions.delete":
             proc_conditions.delete_condition(ctx, rec, args["cond_id"])
+        elif operation == "conditions.export":
+            export_id = uuid.uuid4().hex
+            ext = args["format"]
+            target = ctx.report_dir / f"conditions-{rec['id']}-{datetime.now():%Y%m%d-%H%M%S}-{export_id[:6]}.{ext}"
+            res = proc_conditions.export_table(ctx, rec, ext, output=target, cond_ids=args.get("cond_ids"))
+            output = res["path"]
+            write_json(self.exports / f"{export_id}.json", {"path": output.relative_to(ctx.report_dir).as_posix(), "name": output.name})
+            return {"id": export_id, "name": output.name, "format": res["format"], "count": res["count"],
+                    "url": f"/api/report?id={export_id}", "markdown": res["markdown"]}
         elif operation == "experiments.scan" and self.nas_mode:
             ex.scan_files(ctx, ex.exp_dir(ctx, rec), ex.load_meta(ex.exp_dir(ctx, rec)))
         elif operation != "experiments.scan":
