@@ -14,11 +14,12 @@ from pathlib import Path, PureWindowsPath
 from filelock import FileLock, Timeout
 from jsonschema import Draft202012Validator, FormatChecker
 
-from . import backup, config, experiment as ex, report, steps, references, journal, templates, nas, web_backups, groups as grouping
+from . import backup, config, experiment as ex, report, steps, references, journal, templates, nas, web_backups, groups as grouping, conditions as proc_conditions
 from .file_tags import normalize_tags
 from .importer import ImportItem, file_kind, import_items, set_file_tags
 from .rich_text import search_text
 from .measurements import GROUPS_SCHEMA
+from .conditions import CONDITIONS_SCHEMA, CONDITION_STATUSES, KV_MAP as COND_KV_MAP, ASSET as COND_ASSET
 from .ui import Console
 from .util import now_iso, read_json, sha256_file, write_json
 
@@ -40,11 +41,25 @@ LABELS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLengt
 PATHS = {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 4096}, "minItems": 1, "maxItems": 500, "uniqueItems": True}
 UPLOADS = {"type": "array", "items": {"type": "string", "pattern": "^[a-f0-9]{32}$"}, "maxItems": 100, "uniqueItems": True}
 FIELDS = {name: TEXT for name in ("project", "operator", "device", "batch", "category", "notes", "purpose", "conditions")}
-FIELDS.update(measurement_groups=GROUPS_SCHEMA, title={**SHORT, "minLength": 1, "pattern": r"\S"}, date={"type": "string", "format": "date"},
+FIELDS.update(measurement_groups=GROUPS_SCHEMA, process_conditions=CONDITIONS_SCHEMA,
+              title={**SHORT, "minLength": 1, "pattern": r"\S"}, date={"type": "string", "format": "date"},
               status={"enum": ["planned", "running", "done", "aborted"]}, tags=LABELS,
               groups=grouping.GROUPS_SCHEMA,
               params={"type": "object", "maxProperties": 200, "propertyNames": {"minLength": 1, "maxLength": 128},
                       "additionalProperties": {"type": ["string", "number", "boolean", "null"], "maxLength": 2000}})
+COND_ID = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
+COND_ASSETS = {"type": "array", "maxItems": 50, "items": COND_ASSET}
+COND_PAYLOAD = {
+    "id": COND_ID,
+    "name": {**SHORT, "minLength": 1, "maxLength": 160, "pattern": r"\S"},
+    "sample": {"type": "string", "maxLength": 128},
+    "status": {"enum": list(CONDITION_STATUSES)},
+    "params": COND_KV_MAP,
+    "metrics": COND_KV_MAP,
+    "note": {"type": "string", "maxLength": 10000},
+    "images": COND_ASSETS,
+    "files": COND_ASSETS,
+}
 EXPERIMENT = {"exp_id": ID}
 BACKUP_PATH = {"type": "string", "minLength": 1, "maxLength": 4096}
 BACKUP_RESTORE = {"target": SHORT, "directory": BACKUP_PATH, "snapshot": ID, "contains": {**SHORT, "maxLength": 4096},
@@ -81,6 +96,21 @@ SCHEMAS = {
     "backup.restore": obj(BACKUP_RESTORE, ["snapshot", "destination"]),
     "reports.export": obj({"format": {"enum": ["html", "xlsx"]}}, ["format"]),
     "uploads.discard": obj({**EXPERIMENT, "upload_ids": {**UPLOADS, "minItems": 1}}, ["exp_id", "upload_ids"]),
+    "conditions.save": obj({**EXPERIMENT, **REVISION, **COND_PAYLOAD, "upload_ids": UPLOADS, "existing_paths": {**PATHS, "minItems": 0}}, ["exp_id", "name"]),
+    "conditions.batch": obj({**EXPERIMENT, **REVISION, "items": {"type": "array", "minItems": 1, "maxItems": 60, "items": obj({
+        "name": {**SHORT, "minLength": 1, "maxLength": 160, "pattern": r"\S"},
+        "sample": {"type": "string", "maxLength": 128},
+        "status": {"enum": list(CONDITION_STATUSES)},
+        "params": COND_KV_MAP,
+        "metrics": COND_KV_MAP,
+        "note": {"type": "string", "maxLength": 10000},
+    }, ["name"])}}, ["exp_id", "items"]),
+    "conditions.attach": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID, "upload_ids": UPLOADS, "existing_paths": {**PATHS, "minItems": 0}}, ["exp_id", "cond_id"]),
+    "conditions.detach": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID, "path": {"type": "string", "minLength": 1, "maxLength": 4096}}, ["exp_id", "cond_id", "path"]),
+    "conditions.status": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID, "status": {"enum": list(CONDITION_STATUSES)}}, ["exp_id", "cond_id", "status"]),
+    "conditions.image": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID, "path": {"type": "string", "minLength": 1, "maxLength": 4096}, "caption": {"type": "string", "maxLength": 512}, "set_cover": {"type": "boolean"}}, ["exp_id", "cond_id", "path"]),
+    "conditions.reorder": obj({**EXPERIMENT, **REVISION, "order": {"type": "array", "minItems": 1, "maxItems": 100, "uniqueItems": True, "items": COND_ID}}, ["exp_id", "order"]),
+    "conditions.delete": obj({**EXPERIMENT, **REVISION, "cond_id": COND_ID}, ["exp_id", "cond_id"]),
 }
 VALIDATORS = {name: Draft202012Validator(schema, format_checker=FormatChecker()) for name, schema in SCHEMAS.items()}
 
@@ -232,7 +262,7 @@ class WebService:
         for block in blocks:
             if block["kind"] == "entry":
                 block["references"] = references.decorate(ctx, block.get("references", []))
-        return {**rec, **meta, "groups":names,"groups_invalid":invalid_groups,"revision": sha256_file(folder / ex.META_NAME), "history": meta.get("history", [])[-100:],
+        return {**rec, **meta, "process_conditions": meta.get("process_conditions", []), "groups":names,"groups_invalid":invalid_groups,"revision": sha256_file(folder / ex.META_NAME), "history": meta.get("history", [])[-100:],
                 "journal": notes_text, "journal_blocks":blocks, "journal_truncated": len(raw_notes) > 256 * 1024}
 
     def read(self, name, query):
@@ -586,7 +616,7 @@ class WebService:
             path = self.file_path(ctx, rec, relative)
             f = ctx.db.get_file(rec["id"], path.relative_to(ex.exp_dir(ctx, rec)).as_posix())
             if f["role"] == "meta" or f["relpath"] in referenced or f["relpath"] == "04_notes/日志.md":
-                raise WebError("所选文件是元数据、日志或仍被步骤 / 日志引用；请先在引用记录中解除关联", status=409, code="PROTECTED_FILE")
+                raise WebError("所选文件是元数据、日志或仍被步骤 / 日志 / 工艺条件引用；请先在对应记录中解除关联", status=409, code="PROTECTED_FILE")
             size += path.stat().st_size
         return {"paths": paths, "files": len(paths), "bytes": size}
 
@@ -700,6 +730,46 @@ class WebService:
             for upload_id in args["upload_ids"]:
                 self.discard_upload(upload_id, rec["id"])
             return {"discarded": len(args["upload_ids"])}
+        elif operation == "conditions.save":
+            upload_sources = []
+            for upload_id in args.get("upload_ids", []):
+                info, path = self.upload_manifest(upload_id, rec["id"])
+                upload_sources.append((path, info.get("name", path.name), info.get("tags", [])))
+            existing = [
+                self.file_path(ctx, rec, rel).relative_to(ex.exp_dir(ctx, rec).resolve()).as_posix()
+                for rel in args.get("existing_paths", [])
+            ]
+            payload = {k: args[k] for k in ("id", "name", "sample", "status", "params", "metrics", "note", "images", "files") if k in args}
+            proc_conditions.save_condition(ctx, rec, payload, upload_sources=upload_sources, existing_paths=existing)
+            for upload_id in args.get("upload_ids", []):
+                self.discard_upload(upload_id, rec["id"])
+        elif operation == "conditions.batch":
+            proc_conditions.batch_create(ctx, rec, args["items"])
+        elif operation == "conditions.attach":
+            upload_sources = []
+            for upload_id in args.get("upload_ids", []):
+                info, path = self.upload_manifest(upload_id, rec["id"])
+                upload_sources.append((path, info.get("name", path.name), info.get("tags", [])))
+            existing = [
+                self.file_path(ctx, rec, rel).relative_to(ex.exp_dir(ctx, rec).resolve()).as_posix()
+                for rel in args.get("existing_paths", [])
+            ]
+            if not upload_sources and not existing:
+                raise WebError("请选择要上传或关联的文件")
+            proc_conditions.attach_files(ctx, rec, args["cond_id"], upload_sources=upload_sources, existing_paths=existing)
+            for upload_id in args.get("upload_ids", []):
+                self.discard_upload(upload_id, rec["id"])
+        elif operation == "conditions.detach":
+            proc_conditions.detach_file(ctx, rec, args["cond_id"], args["path"])
+        elif operation == "conditions.status":
+            proc_conditions.update_status(ctx, rec, args["cond_id"], args["status"])
+        elif operation == "conditions.image":
+            proc_conditions.update_image(ctx, rec, args["cond_id"], args["path"],
+                                         caption=args.get("caption"), set_cover=args.get("set_cover", False))
+        elif operation == "conditions.reorder":
+            proc_conditions.reorder(ctx, rec, args["order"])
+        elif operation == "conditions.delete":
+            proc_conditions.delete_condition(ctx, rec, args["cond_id"])
         elif operation == "experiments.scan" and self.nas_mode:
             ex.scan_files(ctx, ex.exp_dir(ctx, rec), ex.load_meta(ex.exp_dir(ctx, rec)))
         elif operation != "experiments.scan":

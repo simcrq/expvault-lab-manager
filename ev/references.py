@@ -96,6 +96,9 @@ def incoming(ctx, exp_id):
             paths.update(item["path"] for item in record.get("references", []) if item.get("exp_id") == exp_id)
         if meta.get("id") == exp_id:
             paths.update(image["path"] for step in meta.get("steps", []) for image in step.get("images", []))
+            for cond in meta.get("process_conditions", []):
+                paths.update(item["path"] for item in cond.get("images", []) if item.get("path"))
+                paths.update(item["path"] for item in cond.get("files", []) if item.get("path"))
     return paths
 
 

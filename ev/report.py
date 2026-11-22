@@ -12,6 +12,7 @@ from pathlib import Path
 from . import backup as bk
 from .config import Ctx
 from .experiment import STATUS_LABEL, exp_dir, load_meta
+from .conditions import CONDITION_STATUS_LABEL, summary_html as conditions_summary_html
 from .measurements import comparison_html
 from .rich_text import notes_html
 from .util import (
@@ -138,6 +139,30 @@ def export_xlsx(ctx: Ctx, path: Path) -> Path:
     _autosize(measurements, [18, 24, 26, 24, 27, 18, 28, 35])
     measurements.auto_filter.ref = f"A1:H{max(1, measurements.max_row)}"
 
+    # ---- 工艺条件矩阵 ----
+    cond_ws = wb.create_sheet("工艺条件矩阵")
+    cond_ws.append(["实验编号", "实验标题", "条件名称", "样品编号", "状态", "工艺参数", "测量指标", "图片数", "附件数", "观察备注"])
+    for rec in recs:
+        for cond in rec.get("process_conditions", []):
+            cond_ws.append([
+                rec["id"],
+                rec["title"],
+                cond.get("name", ""),
+                cond.get("sample", ""),
+                CONDITION_STATUS_LABEL.get(cond.get("status", "pending"), cond.get("status", "")),
+                "; ".join(f"{k}={v}" for k, v in (cond.get("params") or {}).items()),
+                "; ".join(f"{k}={v}" for k, v in (cond.get("metrics") or {}).items()),
+                len(cond.get("images") or []),
+                len(cond.get("files") or []),
+                cond.get("note", ""),
+            ])
+            for cell in cond_ws[cond_ws.max_row]:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
+    _style_header(cond_ws, 10)
+    _autosize(cond_ws, [18, 28, 22, 16, 10, 38, 30, 8, 8, 36])
+    cond_ws.auto_filter.ref = f"A1:J{max(1, cond_ws.max_row)}"
+
     # ---- 统计 ----
     ws4 = wb.create_sheet("统计")
     ws4.append(["维度", "取值", "实验数", "文件数", "占用字节"])
@@ -177,11 +202,11 @@ def export_csv(ctx: Ctx, path: Path) -> Path:
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["编号", "日期", "标题", "状态", "课题", "器件", "批次", "类别", "标签",
-                    "文件数", "占用字节", "目录", "仪器与对照测量(JSON)", "实验分组(JSON)"])
+                    "文件数", "占用字节", "目录", "仪器与对照测量(JSON)", "工艺条件(JSON)", "实验分组(JSON)"])
         for r in recs:
             w.writerow([r["id"], r["date"], r["title"], r["status"], r["project"],
                         r["device"], r["batch"], r["category"], "、".join(r["tag_list"]),
-                        r["file_count"], r["total_bytes"], r["folder"], json.dumps(r.get("measurement_groups", []), ensure_ascii=False), json.dumps(r.get("groups", []), ensure_ascii=False)])
+                        r["file_count"], r["total_bytes"], r["folder"], json.dumps(r.get("measurement_groups", []), ensure_ascii=False), json.dumps(r.get("process_conditions", []), ensure_ascii=False), json.dumps(r.get("groups", []), ensure_ascii=False)])
     return path
 
 
@@ -221,6 +246,7 @@ def export_html(ctx: Ctx, path: Path) -> Path:
       {f'<div class="tags">{groups}</div>' if groups else ''}
       {f'<div class="tags">{tags}</div>' if tags else ''}
       {f'<div class="params">{params_html}</div>' if params_html else ''}
+      <div class="measurements">{conditions_summary_html(r.get('process_conditions', []))}</div>
       <div class="measurements">{comparison_html(r.get('measurement_groups', []))}</div>
       {f'<p class="notes">{notes_html(r.get("notes", ""))}</p>' if r.get('notes') else ''}
       <div class="foot">

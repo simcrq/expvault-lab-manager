@@ -154,6 +154,20 @@ iconPaths.theme =
 iconPaths.pin = '<path d="m16 3 5 5-4 1-3 5-4-4 5-3Z M12 12l-7 7"/>';
 iconPaths.copy =
   '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>';
+iconPaths.grid =
+  '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>';
+iconPaths.list =
+  '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>';
+iconPaths.compare =
+  '<rect x="3" y="4" width="7" height="16" rx="1.5"/><rect x="14" y="4" width="7" height="16" rx="1.5"/>';
+iconPaths.sparkles =
+  '<path d="m12 3 1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8Zm7 11 .9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9ZM5 15l.9 2.1L8 18l-2.1.9L5 21l-.9-2.1L2 18l2.1-.9Z"/>';
+iconPaths.star =
+  '<path d="m12 3 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5L12 17.8 6.2 20.9l1.1-6.5L2.6 9.8l6.5-.9Z"/>';
+iconPaths.chevronLeft = '<path d="m15 18-6-6 6-6"/>';
+iconPaths.chevronRight = '<path d="m9 18 6-6-6-6"/>';
+iconPaths.zoom =
+  '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/>';
 const icon = (name) =>
   `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[name] || iconPaths.file}</svg>`;
 document.querySelectorAll("[data-icon]").forEach((el) => {
@@ -188,6 +202,14 @@ const operationNames = {
   "backup.restore": "恢复备份",
   "reports.export": "导出台账",
   "uploads.discard": "清理暂存",
+  "conditions.save": "保存工艺条件",
+  "conditions.batch": "批量生成工艺条件",
+  "conditions.attach": "上传并关联条件资料",
+  "conditions.detach": "移出条件关联文件",
+  "conditions.status": "更新工艺条件状态",
+  "conditions.image": "更新条件图片信息",
+  "conditions.reorder": "调整工艺条件顺序",
+  "conditions.delete": "删除工艺条件",
 };
 const eventNames = {
   from_template: "由模板创建",
@@ -204,13 +226,39 @@ const eventNames = {
   unarchive: "恢复实验",
   rm: "删除文件",
   scan: "扫描文件",
+  condition_save: "工艺条件更新",
+  condition_batch: "批量生成工艺条件",
+  condition_attach: "条件关联资料",
+  condition_detach: "条件移出资料",
+  condition_status: "条件状态变更",
+  condition_reorder: "条件顺序调整",
+  condition_delete: "删除工艺条件",
 };
+const conditionStatusInfo = {
+  best: { label: "最优", short: "★ 最优", cls: "best" },
+  ok: { label: "合格", short: "✓ 合格", cls: "ok" },
+  tuning: { label: "调试中", short: "● 调试中", cls: "tuning" },
+  pending: { label: "待测", short: "○ 待测", cls: "pending" },
+  failed: { label: "失败", short: "✕ 失败", cls: "failed" },
+};
+function readLocalPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveLocalPref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
 const pendingStatuses = new Set(["queued", "running"]);
 const state = {
   session: null,
   view: "overview",
   expId: "",
-  tab: "summary",
+  tab: "conditions",
   meta: null,
   files: [],
   listQuery: "",
@@ -221,6 +269,7 @@ const state = {
   fileQuery: "",
   fileRole: "",
   filePage: 0,
+  fileViewMode: readLocalPref("expvault.web.file-view", "grid"),
   selected: new Set(),
   experimentSelection: new Set(),
   experimentLabels: new Map(),
@@ -233,6 +282,13 @@ const state = {
   uploadXHR: null,
   parametersExpanded: false,
   parameterExpId: "",
+  condStatusFilter: "",
+  condQuery: "",
+  condSort: "",
+  condLayout: readLocalPref("expvault.web.cond-layout", "grid-3"),
+  condCompare: new Set(),
+  condActiveImage: new Map(),
+  condPasteTarget: "",
 };
 let token =
   location.hash.slice(1) || sessionStorage.getItem("expvault.web.token") || "";
@@ -353,12 +409,22 @@ function routeFromURL() {
     ? p.get("view")
     : "overview";
   state.expId = p.get("exp_id") || "";
-  state.tab = ["summary", "steps", "files", "history"].includes(p.get("tab"))
+  state.tab = ["conditions", "summary", "steps", "files", "history"].includes(
+    p.get("tab"),
+  )
     ? p.get("tab")
-    : "summary";
+    : "conditions";
 }
-function navigate(view, expId = "", tab = "summary", replace = false) {
+function navigate(view, expId = "", tab = "conditions", replace = false) {
   if (view !== "experiments") clearExperimentSelection();
+  if (expId !== state.expId) {
+    state.condStatusFilter = "";
+    state.condQuery = "";
+    state.condSort = "";
+    state.condCompare.clear();
+    state.condActiveImage.clear();
+    state.condPasteTarget = "";
+  }
   state.view = view;
   state.expId = expId;
   state.tab = tab;
@@ -369,7 +435,7 @@ function navigate(view, expId = "", tab = "summary", replace = false) {
   state.meta = null;
   const url =
     "/?" +
-    query({ view, exp_id: expId, tab: tab === "summary" ? undefined : tab });
+    query({ view, exp_id: expId, tab: tab === "conditions" ? undefined : tab });
   history[replace ? "replaceState" : "pushState"](null, "", url);
   closeMenu();
   renderPage({ focusHeading: true });
@@ -583,6 +649,21 @@ const nasWriteActions = new Set([
   "edit-experiment-groups",
   "rename-experiment-group",
   "dissolve-experiment-group",
+  "add-condition",
+  "edit-condition",
+  "clone-condition",
+  "batch-conditions",
+  "seed-condition-from-params",
+  "delete-condition",
+  "condition-upload",
+  "condition-pick",
+  "condition-detach",
+  "condition-move-prev",
+  "condition-move-next",
+  "condition-set-cover",
+  "condition-save-caption",
+  "quick-edit-findings",
+  "quick-files-upload",
 ]);
 function nasReadOnly() {
   return !!state.session?.storage?.read_only;
@@ -684,19 +765,31 @@ function parameterValue(value) {
       ? JSON.stringify(value)
       : String(value);
 }
+function conditionSummaryHTML(record) {
+  const conds = record.process_conditions || [];
+  if (!conds.length) return "";
+  const best = conds.find((c) => c.status === "best");
+  const imgCount = conds.reduce((sum, c) => sum + (c.images?.length || 0), 0);
+  return `<div class="exp-cond-summary"><span class="exp-cond-pill">${icon("grid")}${conds.length} 组工艺条件${imgCount ? ` · ${imgCount} 图` : ""}</span>${best ? `<span class="exp-cond-best" title="${e(best.name)}">★ 最优：${scientificHTML(best.name)}</span>` : ""}</div>`;
+}
 function compactParameters(record, limit = 2) {
+  const condHtml = conditionSummaryHTML(record);
   const values = orderedParameters(record);
-  return values.length
-    ? `<dl class="compact-parameters">${values
-        .slice(0, limit)
-        .map(
-          ([key, value]) =>
-            `<div><dt>${scientificHTML(key)}</dt><dd>${scientificHTML(parameterValue(value))}</dd></div>`,
-        )
-        .join(
-          "",
-        )}</dl>${values.length > limit ? `<span class="parameter-more">另 ${values.length - limit} 项参数</span>` : ""}`
-    : '<span class="muted">未填写参数</span>';
+  if (!values.length && condHtml) return condHtml;
+  return (
+    condHtml +
+    (values.length
+      ? `<dl class="compact-parameters">${values
+          .slice(0, limit)
+          .map(
+            ([key, value]) =>
+              `<div><dt>${scientificHTML(key)}</dt><dd>${scientificHTML(parameterValue(value))}</dd></div>`,
+          )
+          .join(
+            "",
+          )}</dl>${values.length > limit ? `<span class="parameter-more">另 ${values.length - limit} 项参数</span>` : ""}`
+      : '<span class="muted">未填写参数</span>')
+  );
 }
 const collapsedDetailPanels = new Map();
 function detailPanelPreferenceKey(expId, panel) {
@@ -915,6 +1008,370 @@ async function experimentsPage() {
       )}</select><select id="experiment-group-filter" aria-label="实验分组筛选"><option value="">全部分组</option><option value="ungrouped" ${state.groupFilter === "ungrouped" ? "selected" : ""}>未分组</option>${groups.items.map((item) => `<option value="group:${e(item.name)}" ${state.groupFilter === "group:" + item.name ? "selected" : ""}>${e(item.name)}（${item.count}）</option>`).join("")}${groupQuery.group && !groups.items.some((item) => item.name === groupQuery.group) ? `<option value="${e(state.groupFilter)}" selected>${e(groupQuery.group)}（暂无实验）</option>` : ""}</select></div><label class="checkbox-label"><input id="include-archived" type="checkbox" ${state.archived ? "checked" : ""}>包含已归档</label></div><section class="panel"><div class="experiment-selection-bar"><span id="experiment-selection-count">已选 ${state.experimentSelection.size} 个</span><div class="toolbar-group">${button("bulk-add-groups", "添加到分组", "plus", `data-experiment-bulk ${state.experimentSelection.size ? "" : "disabled"}`)}${button("bulk-remove-groups", "移出分组", "folder", `data-experiment-bulk ${state.experimentSelection.size ? "" : "disabled"}`)}${button("clear-experiment-selection", "清空选择", "close", `data-experiment-bulk ${state.experimentSelection.size ? "" : "disabled"}`)}</div></div><p class="experiment-selection-hint field-hint">可跨页选择，最多 200 个；更改筛选会清空选择。分组计数含已归档实验。</p>${data.items.length ? experimentTable(data.items, true) : empty("没有找到匹配的实验", "试试其他关键词，或新建一项实验。")}<footer class="table-footer"><span>共 ${data.total} 个匹配实验 · 第 ${state.page + 1} 页</span><div class="toolbar-group"><button class="button small" data-action="previous-page" ${state.page === 0 ? "disabled" : ""}>上一页</button><button class="button small" data-action="next-page" ${!data.has_more ? "disabled" : ""}>下一页</button></div></footer></section>`
   );
 }
+function analyzeConditionParams(conditions) {
+  const keyOrder = [];
+  const valueSets = new Map();
+  const metricOrder = [];
+  for (const c of conditions) {
+    for (const [k, v] of Object.entries(c.params || {})) {
+      if (!valueSets.has(k)) {
+        keyOrder.push(k);
+        valueSets.set(k, new Set());
+      }
+      valueSets.get(k).add(parameterValue(v));
+    }
+    for (const k of Object.keys(c.metrics || {})) {
+      if (!metricOrder.includes(k)) metricOrder.push(k);
+    }
+  }
+  const varyingKeys = new Set();
+  const sharedKeys = new Set();
+  for (const k of keyOrder) {
+    const presentCount = conditions.filter(
+      (c) => c.params && Object.hasOwn(c.params, k),
+    ).length;
+    if (valueSets.get(k).size > 1 || presentCount < conditions.length) {
+      varyingKeys.add(k);
+    } else {
+      sharedKeys.add(k);
+    }
+  }
+  return { keyOrder, varyingKeys, sharedKeys, metricOrder };
+}
+function numericParamScore(raw) {
+  if (raw == null || raw === "") return null;
+  const match = String(raw).trim().match(/^[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+function filteredSortedConditions(meta) {
+  const all = (meta.process_conditions || []).map((c, idx) => ({
+    ...c,
+    _idx: idx + 1,
+  }));
+  let list = all;
+  if (state.condStatusFilter) {
+    list = list.filter((c) => (c.status || "pending") === state.condStatusFilter);
+  }
+  const q = state.condQuery.trim().toLowerCase();
+  if (q) {
+    list = list.filter((c) => {
+      const hay = [
+        c.name,
+        c.sample,
+        c.note,
+        conditionStatusInfo[c.status]?.label,
+        ...Object.entries(c.params || {}).flatMap(([k, v]) => [k, String(v)]),
+        ...Object.entries(c.metrics || {}).flatMap(([k, v]) => [k, String(v)]),
+        ...(c.images || []).flatMap((a) => [a.name, a.caption]),
+        ...(c.files || []).flatMap((a) => [a.name, a.caption]),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }
+  if (state.condSort === "status") {
+    const order = { best: 0, ok: 1, tuning: 2, pending: 3, failed: 4 };
+    list = [...list].sort(
+      (a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9),
+    );
+  } else if (state.condSort.startsWith("param:")) {
+    const [, dir, ...rest] = state.condSort.split(":");
+    const key = rest.join(":");
+    const mult = dir === "desc" ? -1 : 1;
+    list = [...list].sort((a, b) => {
+      const va = a.params?.[key];
+      const vb = b.params?.[key];
+      const hasA = va !== undefined && va !== "" && va !== null;
+      const hasB = vb !== undefined && vb !== "" && vb !== null;
+      if (!hasA && !hasB) return a._idx - b._idx;
+      if (!hasA) return 1;
+      if (!hasB) return -1;
+      const na = numericParamScore(va);
+      const nb = numericParamScore(vb);
+      if (na !== null && nb !== null && na !== nb) return (na - nb) * mult;
+      return String(va).localeCompare(String(vb), "zh-CN", { numeric: true }) * mult;
+    });
+  }
+  return { all, list };
+}
+function conditionStatusSelectHTML(c) {
+  const st = c.status || "pending";
+  const ro = nasReadOnly() ? "disabled" : "";
+  return `<select class="cond-status-select status-${e(st)}" data-cond-status="${e(c.id)}" aria-label="修改 ${e(c.name)} 状态" ${ro}>${Object.entries(
+    conditionStatusInfo,
+  )
+    .map(
+      ([key, info]) =>
+        `<option value="${key}" ${st === key ? "selected" : ""}>${info.short}</option>`,
+    )
+    .join("")}</select>`;
+}
+function conditionCardHTML(c, analysis, canReorder, totalCount) {
+  const st = c.status || "pending";
+  const imgs = c.images || [];
+  const files = c.files || [];
+  const rawActiveIdx = state.condActiveImage.get(c.id) || 0;
+  const activeIdx = imgs.length ? Math.min(rawActiveIdx, imgs.length - 1) : 0;
+  const hero = imgs[activeIdx];
+  const checked = state.condCompare.has(c.id);
+  const isPasteTarget = state.condPasteTarget === c.id;
+  const entries = Object.entries(c.params || {});
+  const varyingEntries = entries.filter(([k]) => analysis.varyingKeys.has(k));
+  const sharedEntries = entries.filter(([k]) => !analysis.varyingKeys.has(k));
+  const metrics = Object.entries(c.metrics || {});
+  const ro = nasReadOnly();
+
+  const mediaHTML = hero
+    ? `<div class="cond-media" data-cond-drop="${e(c.id)}">
+        <button type="button" class="cond-hero-btn" data-action="condition-lightbox" data-cond="${e(c.id)}" data-index="${activeIdx}" aria-label="放大查看 ${e(hero.name)}">
+          <img class="cond-hero-img" src="${e(fileURL(hero.path))}" alt="${e(hero.caption || hero.name)}" loading="lazy" />
+          <span class="cond-hero-zoom">${icon("zoom")}放大</span>
+        </button>
+        <span class="cond-img-badge">${activeIdx + 1} / ${imgs.length}</span>
+        ${ro ? "" : `<button type="button" class="cond-quick-add-img" data-action="condition-upload" data-cond="${e(c.id)}" title="继续上传图片到此条件">${icon("plus")}</button>`}
+        ${hero.caption ? `<div class="cond-hero-caption" title="${e(hero.caption)}">${scientificHTML(hero.caption)}</div>` : ""}
+        <div class="cond-drop-overlay">${icon("upload")}<span>松开即可归档到此条件</span></div>
+      </div>
+      ${
+        imgs.length > 1
+          ? `<div class="cond-thumb-strip" role="list" aria-label="条件图片缩略图">${imgs
+              .slice(0, 8)
+              .map(
+                (img, i) =>
+                  `<button type="button" class="cond-thumb ${i === activeIdx ? "active" : ""}" data-action="condition-select-thumb" data-cond="${e(c.id)}" data-index="${i}" title="${e(img.caption || img.name)}"><img src="${e(fileURL(img.path))}" alt="${e(img.name)}" loading="lazy" /></button>`,
+              )
+              .join("")}${imgs.length > 8 ? `<button type="button" class="cond-thumb cond-thumb-more" data-action="condition-lightbox" data-cond="${e(c.id)}" data-index="8">+${imgs.length - 8}</button>` : ""}</div>`
+          : ""
+      }`
+    : `<div class="cond-media cond-media-empty" data-cond-drop="${e(c.id)}">
+        <button type="button" class="cond-empty-drop-btn" data-action="condition-upload" data-cond="${e(c.id)}" ${ro ? "disabled" : ""}>
+          ${icon("image")}
+          <strong>${ro ? "暂无实拍图" : "拖入图片 / 点击上传"}</strong>
+          <small>${ro ? "只读模式" : "选中卡片后可 Ctrl+V 直接粘贴截图"}</small>
+        </button>
+        <div class="cond-drop-overlay">${icon("upload")}<span>松开即可归档到此条件</span></div>
+      </div>`;
+
+  const paramsHTML = entries.length
+    ? `<div class="cond-params">${varyingEntries
+        .map(
+          ([k, v]) =>
+            `<span class="cond-param-chip varying" title="差异工艺参数"><span class="cond-param-k">${scientificHTML(k)}</span><strong class="cond-param-v">${scientificHTML(parameterValue(v))}</strong></span>`,
+        )
+        .join("")}${sharedEntries
+        .map(
+          ([k, v]) =>
+            `<span class="cond-param-chip shared" title="公共工艺参数"><span class="cond-param-k">${scientificHTML(k)}</span><strong class="cond-param-v">${scientificHTML(parameterValue(v))}</strong></span>`,
+        )
+        .join("")}</div>`
+    : `<div class="cond-params"><span class="muted cond-empty-hint">未填写工艺参数</span></div>`;
+
+  const metricsHTML = metrics.length
+    ? `<div class="cond-metrics">${metrics
+        .map(
+          ([k, v]) =>
+            `<span class="cond-metric-pill"><span>${scientificHTML(k)}</span><b>${scientificHTML(parameterValue(v))}</b></span>`,
+        )
+        .join("")}</div>`
+    : "";
+
+  const filesHTML = files.length
+    ? `<div class="cond-files">${files
+        .map(
+          (f) =>
+            `<button type="button" class="cond-file-chip" data-action="preview-file" data-path="${e(f.path)}" title="${e(f.path)}">${icon("file")}<span>${e(f.name)}</span></button>`,
+        )
+        .join("")}</div>`
+    : "";
+
+  return `<article class="condition-card status-${e(st)}${checked ? " selected" : ""}${isPasteTarget ? " paste-active" : ""}" data-cond-id="${e(c.id)}" data-cond-drop="${e(c.id)}" tabindex="0">
+    <header class="cond-card-head">
+      <label class="cond-check-wrap" title="勾选以并排对比">
+        <input type="checkbox" data-cond-compare="${e(c.id)}" ${checked ? "checked" : ""} aria-label="勾选对比 ${e(c.name)}" />
+        <span class="cond-index">#${String(c._idx).padStart(2, "0")}</span>
+      </label>
+      <div class="cond-title-wrap">
+        <h3 class="cond-title" title="${e(c.name)}">${scientificHTML(c.name)}</h3>
+        ${c.sample ? `<span class="cond-sample">${scientificHTML(c.sample)}</span>` : ""}
+      </div>
+      ${conditionStatusSelectHTML(c)}
+    </header>
+    ${mediaHTML}
+    <div class="cond-card-body">
+      ${paramsHTML}
+      ${metricsHTML}
+      ${c.note ? `<p class="cond-note" title="${e(c.note)}">${scientificHTML(c.note)}</p>` : ""}
+      ${filesHTML}
+    </div>
+    <footer class="cond-card-foot">
+      <div class="cond-foot-left">
+        <button type="button" class="cond-action-btn" data-action="edit-condition" data-cond="${e(c.id)}">${icon("edit")}编辑</button>
+        <button type="button" class="cond-action-btn" data-action="clone-condition" data-cond="${e(c.id)}" title="复制此组参数快速新建下一组">${icon("copy")}复制</button>
+        <button type="button" class="cond-action-btn" data-action="condition-upload" data-cond="${e(c.id)}" title="直接上传图片或数据文件">${icon("upload")}传图</button>
+        <button type="button" class="cond-action-btn" data-action="condition-pick" data-cond="${e(c.id)}" title="关联本实验已导入的文件">${icon("folder")}关联</button>
+      </div>
+      <div class="cond-foot-right">
+        ${
+          canReorder
+            ? `<button type="button" class="cond-icon-btn" data-action="condition-move-prev" data-cond="${e(c.id)}" ${c._idx === 1 ? "disabled" : ""} aria-label="前移" title="前移">${icon("chevronLeft")}</button><button type="button" class="cond-icon-btn" data-action="condition-move-next" data-cond="${e(c.id)}" ${c._idx === totalCount ? "disabled" : ""} aria-label="后移" title="后移">${icon("chevronRight")}</button>`
+            : ""
+        }
+        <button type="button" class="cond-icon-btn danger" data-action="delete-condition" data-cond="${e(c.id)}" aria-label="删除 ${e(c.name)}" title="删除此条件">${icon("trash")}</button>
+      </div>
+    </footer>
+  </article>`;
+}
+function conditionMatrixTableHTML(list, analysis) {
+  const paramCols = [
+    ...analysis.keyOrder.filter((k) => analysis.varyingKeys.has(k)),
+    ...analysis.keyOrder.filter((k) => !analysis.varyingKeys.has(k)),
+  ];
+  const metricCols = analysis.metricOrder;
+  return `<section class="panel"><div class="table-wrap cond-matrix-wrap"><table class="cond-matrix-table"><thead><tr>
+    <th class="col-select"><span class="sr-only">对比</span></th>
+    <th>工艺条件 / 样品</th>
+    <th>状态</th>
+    <th>图片 / 附件</th>
+    ${paramCols.map((k) => `<th class="${analysis.varyingKeys.has(k) ? "varying-col" : ""}">${scientificHTML(k)}</th>`).join("")}
+    ${metricCols.map((k) => `<th class="metric-col">${scientificHTML(k)}</th>`).join("")}
+    <th>观察备注</th>
+    <th>操作</th>
+  </tr></thead><tbody>${list
+    .map((c) => {
+      const checked = state.condCompare.has(c.id);
+      const imgs = c.images || [];
+      const files = c.files || [];
+      return `<tr data-cond-id="${e(c.id)}" data-cond-drop="${e(c.id)}" class="${checked ? "selected" : ""}">
+        <td class="col-select"><input type="checkbox" data-cond-compare="${e(c.id)}" ${checked ? "checked" : ""} aria-label="勾选对比 ${e(c.name)}" /></td>
+        <td><div class="cond-table-name"><span class="cond-index">#${String(c._idx).padStart(2, "0")}</span><strong>${scientificHTML(c.name)}</strong>${c.sample ? `<small>${scientificHTML(c.sample)}</small>` : ""}</div></td>
+        <td>${conditionStatusSelectHTML(c)}</td>
+        <td><div class="cond-table-media">${imgs
+          .slice(0, 4)
+          .map(
+            (img, idx) =>
+              `<button type="button" class="cond-table-thumb" data-action="condition-lightbox" data-cond="${e(c.id)}" data-index="${idx}" title="${e(img.caption || img.name)}"><img src="${e(fileURL(img.path))}" alt="${e(img.name)}" loading="lazy" /></button>`,
+          )
+          .join("")}${imgs.length > 4 ? `<button type="button" class="cond-table-more" data-action="condition-lightbox" data-cond="${e(c.id)}" data-index="4">+${imgs.length - 4}</button>` : ""}${files.length ? `<span class="cond-table-filecount" title="数据文件">${icon("file")}${files.length}</span>` : ""}<button type="button" class="cond-icon-btn" data-action="condition-upload" data-cond="${e(c.id)}" title="上传图片/文件">${icon("plus")}</button></div></td>
+        ${paramCols.map((k) => `<td class="${analysis.varyingKeys.has(k) ? "varying-cell" : ""}">${c.params && Object.hasOwn(c.params, k) ? scientificHTML(parameterValue(c.params[k])) : '<span class="muted">—</span>'}</td>`).join("")}
+        ${metricCols.map((k) => `<td>${c.metrics && Object.hasOwn(c.metrics, k) ? scientificHTML(parameterValue(c.metrics[k])) : '<span class="muted">—</span>'}</td>`).join("")}
+        <td class="cond-table-note">${c.note ? scientificHTML(c.note) : '<span class="muted">—</span>'}</td>
+        <td><div class="table-actions"><button type="button" class="icon-button" data-action="edit-condition" data-cond="${e(c.id)}" title="编辑">${icon("edit")}</button><button type="button" class="icon-button" data-action="clone-condition" data-cond="${e(c.id)}" title="复制参数">${icon("copy")}</button><button type="button" class="icon-button" data-action="delete-condition" data-cond="${e(c.id)}" title="删除">${icon("trash")}</button></div></td>
+      </tr>`;
+    })
+    .join("")}</tbody></table></div></section>`;
+}
+function conditionsSection(meta) {
+  const { all, list } = filteredSortedConditions(meta);
+  // Keep compare selection valid for current experiment
+  const validIds = new Set(all.map((c) => c.id));
+  for (const id of [...state.condCompare]) {
+    if (!validIds.has(id)) state.condCompare.delete(id);
+  }
+  const baseParams = Object.entries(meta.params || {});
+  const baselineBar = baseParams.length
+    ? `<div class="cond-baseline-strip"><span class="cond-baseline-label">${icon("pin")}基准参数</span><div class="cond-baseline-items">${baseParams
+        .slice(0, 8)
+        .map(
+          ([k, v]) =>
+            `<span class="cond-baseline-chip"><span>${scientificHTML(k)}</span><b>${scientificHTML(parameterValue(v))}</b></span>`,
+        )
+        .join("")}${baseParams.length > 8 ? `<span class="muted">+${baseParams.length - 8} 项</span>` : ""}</div><button type="button" class="text-button" data-action="edit-parameters">编辑基准</button></div>`
+    : "";
+
+  if (!all.length) {
+    return `${baselineBar}<section class="panel cond-empty-workspace">
+      <div class="cond-empty-inner">
+        <div class="cond-empty-icon">${icon("grid")}</div>
+        <h2>在同一实验内管理多组工艺参数与实拍图</h2>
+        <p>把不同温度、时间、功率、转速或配比设为独立的<strong>矩形条件块</strong>，直接把显微镜 / SEM / 外观照片拖到对应卡片上，一键并排对比参数差异与效果。</p>
+        <div class="cond-empty-actions">
+          ${button("add-condition", "添加第一组工艺条件", "plus", "", true)}
+          ${button("batch-conditions", "批量生成参数矩阵", "sparkles")}
+          ${baseParams.length ? button("seed-condition-from-params", "从现有基准参数创建", "copy") : ""}
+        </div>
+      </div>
+    </section>`;
+  }
+
+  const analysis = analyzeConditionParams(all);
+  const counts = { all: all.length };
+  for (const k of Object.keys(conditionStatusInfo)) {
+    counts[k] = all.filter((c) => (c.status || "pending") === k).length;
+  }
+  const compareCount = state.condCompare.size;
+  const canReorder =
+    !state.condStatusFilter && !state.condQuery.trim() && !state.condSort && !nasReadOnly();
+
+  const sortOptions = [
+    `<option value="" ${state.condSort === "" ? "selected" : ""}>默认顺序</option>`,
+    `<option value="status" ${state.condSort === "status" ? "selected" : ""}>按评估状态（最优优先）</option>`,
+    ...analysis.keyOrder.flatMap((k) => [
+      `<option value="param:asc:${e(k)}" ${state.condSort === "param:asc:" + k ? "selected" : ""}>按「${e(k)}」升序</option>`,
+      `<option value="param:desc:${e(k)}" ${state.condSort === "param:desc:" + k ? "selected" : ""}>按「${e(k)}」降序</option>`,
+    ]),
+  ].join("");
+
+  const layoutBtns = [
+    ["grid-2", "2列大图", "grid"],
+    ["grid-3", "3列标准", "grid"],
+    ["grid-4", "4列紧凑", "grid"],
+    ["table", "对照表", "list"],
+  ]
+    .map(
+      ([mode, label, ic]) =>
+        `<button type="button" class="cond-layout-btn ${state.condLayout === mode ? "active" : ""}" data-action="condition-layout" data-layout="${mode}" title="${label}">${icon(ic)}<span>${label}</span></button>`,
+    )
+    .join("");
+
+  const filterPills = [
+    ["", `全部`, counts.all],
+    ...Object.entries(conditionStatusInfo).map(([key, info]) => [
+      key,
+      info.short,
+      counts[key],
+    ]),
+  ]
+    .filter(([key, , count]) => key === "" || count > 0 || state.condStatusFilter === key)
+    .map(
+      ([key, label, count]) =>
+        `<button type="button" class="cond-filter-pill ${state.condStatusFilter === key ? "active" : ""}${key ? " status-" + key : ""}" data-action="condition-filter-status" data-status="${key}">${label} <span>${count}</span></button>`,
+    )
+    .join("");
+
+  const body = list.length
+    ? state.condLayout === "table"
+      ? conditionMatrixTableHTML(list, analysis)
+      : `<div class="condition-grid layout-${e(state.condLayout)}">${list
+          .map((c) => conditionCardHTML(c, analysis, canReorder, all.length))
+          .join("")}</div>`
+    : `<section class="panel">${empty("没有匹配的工艺条件", "清空筛选词或切换状态即可查看全部条件。", '<button type="button" class="button" data-action="condition-reset-filters">显示全部条件</button>')}</section>`;
+
+  return `${baselineBar}
+  <div class="cond-toolbar">
+    <div class="cond-toolbar-row">
+      <div class="cond-filter-pills" role="group" aria-label="按条件状态筛选">${filterPills}</div>
+      <div class="cond-toolbar-actions">
+        <button type="button" class="button small ${compareCount >= 2 ? "primary" : ""}" id="cond-compare-btn" data-action="compare-conditions" ${compareCount < 2 ? "disabled" : ""} title="勾选 2–4 个条件卡片并排对比">${icon("compare")}并排对比${compareCount ? ` (${compareCount})` : ""}</button>
+        ${compareCount ? '<button type="button" class="text-button" data-action="clear-cond-compare">清空勾选</button>' : ""}
+        ${button("batch-conditions", "批量矩阵", "sparkles")}
+        ${button("add-condition", "添加条件", "plus", "", true)}
+      </div>
+    </div>
+    <div class="cond-toolbar-row cond-toolbar-sub">
+      <div class="toolbar-group">
+        <div class="search-box cond-search-box">${icon("search")}<input id="cond-query" value="${e(state.condQuery)}" placeholder="筛选参数、样品、备注或文件名…" aria-label="筛选工艺条件" /></div>
+        <select id="cond-sort" class="cond-sort-select" aria-label="工艺条件排序">${sortOptions}</select>
+      </div>
+      <div class="toolbar-group">
+        <span class="cond-paste-hint muted">${icon("info")}拖图到任意矩形块直接上传 · 选中卡片可 Ctrl+V 贴图</span>
+        <div class="cond-layout-switch" role="group" aria-label="排列方式">${layoutBtns}</div>
+      </div>
+    </div>
+  </div>
+  ${body}`;
+}
 async function detailPage() {
   if (!state.expId)
     return empty(
@@ -924,25 +1381,26 @@ async function detailPage() {
     );
   const meta = await api("experiment?" + query({ exp_id: state.expId }));
   state.meta = meta;
+  const condCount = (meta.process_conditions || []).length;
   const actions =
     `<details class="experiment-reuse"><summary class="button">${icon("copy")}复用实验</summary><div class="reuse-menu">${button("duplicate-experiment", "复制实验", "copy")}${button("batch-experiments", "按模板批量生成", "plus")}</div></details>` +
     button("edit-experiment", "编辑实验", "edit") +
     button("phone-import", "扫码传入", "upload") +
     button("import", "导入资料", "upload", "", true);
-  let html = `<div class="page-heading detail-heading"><div><a class="back-link" href="/?view=experiments" data-nav="experiments">${icon("back")}返回实验项目</a><div class="detail-identity"><h1>${scientificHTML(meta.title)}</h1>${badge(meta.status)}${statusButton(meta)}</div><div class="detail-subtitle"><span class="mono">${e(meta.id)}</span><span>${e(date(meta.date))}</span><span>${e(meta.project || "未设置课题")}</span></div>${meta.template_source ? `<p class="field-hint">来源模板：${scientificHTML(meta.template_source.title || "")} · ${e(meta.template_source.id || "")}（创建时编号）</p>` : ""}</div><div class="heading-actions">${actions}</div></div><dl class="experiment-facts">${[
-    ["器件 / 样品", meta.device || "未填写样品编号"],
-    ["工艺批次", meta.batch || "未填写"],
-    ["操作人", meta.operator || "未填写"],
-    ["实验日期", date(meta.date)],
-  ]
-    .map(
-      ([label, value]) =>
-        `<div><dt>${label}</dt><dd>${scientificHTML(value)}</dd></div>`,
-    )
-    .join(
-      "",
-    )}</dl><div class="detail-experiment-groups"><div><span class="muted">实验分组</span><div class="experiment-group-line">${experimentGroupChips(meta.groups) || '<span class="muted">未分组</span>'}</div>${meta.groups_invalid ? '<p class="field-hint">分组数据格式异常，可重新设置分组。</p>' : ""}</div>${button("edit-experiment-groups", "设置分组", "folder")}</div><div id="experiment-parameters">${parameterPanel(meta)}</div><div id="experiment-measurements">${measurementPanel(meta)}</div><div class="tabs" role="tablist" aria-label="实验内容">${[
-    ["summary", "实验概览"],
+  const inlineStatus = meta.archived
+    ? `${badge("archived")}`
+    : `<select id="quick-exp-status" class="quick-status-select status-${e(meta.status)}" aria-label="快速修改实验状态" ${nasReadOnly() ? "disabled" : ""}>${Object.entries(
+        statuses,
+      )
+        .filter(([key]) => key !== "archived")
+        .map(
+          ([key, label]) =>
+            `<option value="${key}" ${meta.status === key ? "selected" : ""}>${label}</option>`,
+        )
+        .join("")}</select>`;
+  let html = `<div class="page-heading detail-heading compact-detail-heading"><div><a class="back-link" href="/?view=experiments" data-nav="experiments">${icon("back")}返回实验项目</a><div class="detail-identity"><h1>${scientificHTML(meta.title)}</h1>${inlineStatus}</div><div class="detail-meta-bar"><span class="mono">${e(meta.id)}</span><span>${e(date(meta.date))}</span><span>样品 <strong>${scientificHTML(meta.device || "未填")}</strong></span>${meta.batch ? `<span>批次 <strong>${scientificHTML(meta.batch)}</strong></span>` : ""}<span>${e(meta.operator || "未署名")}</span>${meta.project ? `<span>${e(meta.project)}</span>` : ""}${meta.groups?.length ? `<span class="detail-inline-groups">${experimentGroupChips(meta.groups)}</span>` : ""}<button type="button" class="text-button" data-action="edit-experiment-groups">设置分组</button></div>${meta.template_source ? `<p class="field-hint">来源模板：${scientificHTML(meta.template_source.title || "")} · ${e(meta.template_source.id || "")}</p>` : ""}</div><div class="heading-actions">${actions}</div></div><div class="tabs" role="tablist" aria-label="实验内容">${[
+    ["conditions", `工艺条件 · ${condCount}`],
+    ["summary", "实验概览与参数"],
     ["steps", `步骤与日志 · ${(meta.steps || []).length}`],
     ["files", `文件资料 · ${meta.file_count || 0}`],
     ["history", "变更记录"],
@@ -955,6 +1413,7 @@ async function detailPage() {
   const tabPanel = (body) =>
     html +
     `<div id="detail-panel" role="tabpanel" aria-labelledby="detail-tab-${state.tab}" tabindex="0">${body}</div>`;
+  if (state.tab === "conditions") return tabPanel(conditionsSection(meta));
   if (state.tab === "files") return tabPanel(await filesSection());
   if (state.tab === "steps") return tabPanel(stepsSection(meta));
   if (state.tab === "history")
@@ -967,7 +1426,7 @@ async function detailPage() {
               `<tr><td>${e(date(item.ts, true))}</td><td>${e(eventNames[item.action] || item.action)}</td><td class="file-name">${e(item.detail)}</td></tr>`,
           )
           .join("") || '<tr><td colspan="3">还没有变更记录</td></tr>'
-      }</tbody></table></div></section>`
+      }</tbody></table></div></section>`,
     );
   const prose = (title, key, name) =>
     `<section class="panel"><div class="panel-body spaced"><h3 class="section-title">${icon(name)}${title}</h3><p class="prose ${meta[key] ? "" : "empty"}">${scientificHTML(meta[key] || "暂未填写，点击「编辑实验」补充。")}</p></div></section>`;
@@ -976,12 +1435,12 @@ async function detailPage() {
     .filter((entry) => entry.kind === "entry")
     .at(-1);
   return tabPanel(
-    `<div class="detail-grid"><div class="section-stack">
-    <section class="panel findings-panel"><header class="panel-header"><h2>实验结果与下一步</h2>${icon("activity")}</header><div class="findings-grid"><div><h3>结果与观察</h3><p class="prose ${meta.results ? "" : "empty"}">${scientificHTML(meta.results || "尚未记录结果，实验过程中可随时补充。")}</p></div><div><h3>结论与下一步</h3><p class="prose ${meta.conclusion ? "" : "empty"}">${scientificHTML(meta.conclusion || "尚未填写结论与后续计划。")}</p></div></div></section>
+    `<div id="experiment-parameters">${parameterPanel(meta)}</div><div id="experiment-measurements">${measurementPanel(meta)}</div><div class="detail-grid"><div class="section-stack">
+    <section class="panel findings-panel"><header class="panel-header"><h2>实验结果与下一步</h2><button type="button" class="text-button" data-action="quick-edit-findings">${icon("edit")}快速记录结果与结论</button></header><div class="findings-grid"><div><h3>结果与观察</h3><p class="prose ${meta.results ? "" : "empty"}">${scientificHTML(meta.results || "尚未记录结果，实验过程中可随时补充。")}</p></div><div><h3>结论与下一步</h3><p class="prose ${meta.conclusion ? "" : "empty"}">${scientificHTML(meta.conclusion || "尚未填写结论与后续计划。")}</p></div></div></section>
     <div class="context-grid">${prose("实验目的", "purpose", "target")}${prose("测试条件", "conditions", "flask")}</div>
     <section class="panel"><div class="panel-body spaced"><h3 class="section-title">${icon("tag")}实验标签与备注</h3><div class="tag-line">${tagHTML(meta.tags) || '<span class="muted">暂无标签</span>'}</div><p class="prose experiment-notes">${notesHTML(meta.notes || "暂无备注")}</p></div></section>
   </div><aside class="detail-sidebar"><section class="panel"><header class="panel-header"><h2>现场记录</h2><span class="section-count">${(meta.steps || []).length} 步</span></header><div class="panel-body"><p class="latest-step-label">最近的实验步骤</p>${latest ? `<strong class="latest-step-title">${scientificHTML(latest.title || `步骤 ${latest.number}`)}</strong><p class="prose latest-step-text">${scientificHTML(latest.text || "暂无文字记录")}</p><p class="field-hint">${e(date(latest.created_at, true))}</p>` : '<p class="prose empty">还没有步骤，先记录本次操作与条件。</p>'}${latest ? referencesHTML(latest.references) : ""}${latestNote ? `<div class="latest-note"><p class="latest-step-label">最近的日志</p><p class="prose latest-step-text">${scientificHTML(latestNote.text)}</p>${referencesHTML(latestNote.references)}</div>` : ""}<div class="record-actions">${button("add-step", "记录步骤", "plus", "", true)}${button("add-note", "追加日志", "note")}</div></div></section>
-  <section class="panel"><div class="panel-body spaced"><h3 class="section-title">${icon("shield")}资料与归档</h3><p class="prose">文件 ${meta.file_count || 0} 个 · ${size(meta.total_bytes)}</p><dl class="metadata-list"><dt>创建时间</dt><dd>${e(date(meta.created_at, true))}</dd><dt>最近更新</dt><dd>${e(date(meta.updated_at, true))}</dd><dt>实验类别</dt><dd>${e(meta.category || "未填写")}</dd></dl><div class="heading-actions">${button("verify", "校验文件", "shield")}${button("archive", meta.archived ? "恢复实验" : "归档实验", "archive")}</div></div></section></aside></div>`
+  <section class="panel"><div class="panel-body spaced"><h3 class="section-title">${icon("shield")}资料与归档</h3><p class="prose">文件 ${meta.file_count || 0} 个 · ${size(meta.total_bytes)}</p><dl class="metadata-list"><dt>创建时间</dt><dd>${e(date(meta.created_at, true))}</dd><dt>最近更新</dt><dd>${e(date(meta.updated_at, true))}</dd><dt>实验类别</dt><dd>${e(meta.category || "未填写")}</dd></dl><div class="heading-actions">${button("verify", "校验文件", "shield")}${button("archive", meta.archived ? "恢复实验" : "归档实验", "archive")}</div></div></section></aside></div>`,
   );
 }
 
@@ -1031,7 +1490,31 @@ async function filesSection() {
   );
   state.files = data.items;
   state.selected.clear();
-  return `<div class="toolbar"><div class="toolbar-group"><div class="search-box">${icon("search")}<input id="file-query" aria-label="筛选文件名或标签" value="${e(state.fileQuery)}" placeholder="按文件名或文件标签查找"></div><select id="file-role" aria-label="文件角色"><option value="">全部资料</option>${state.session.roles.map((r) => `<option value="${e(r.role)}" ${state.fileRole === r.role ? "selected" : ""}>${e(r.label)}</option>`).join("")}</select></div><div class="toolbar-group">${button("scan", "扫描目录", "refresh")}${state.view === "experiment" ? button("import", "导入资料", "upload") : ""}</div></div><div class="toolbar"><span id="selected-count" class="files-toolbar-count">共 ${data.total} 个文件</span><div class="toolbar-group"><button class="button small" id="file-tag-button" data-action="edit-file-tags" disabled>${icon("tag")}批量标签</button><button class="button small danger" id="file-delete-button" data-action="delete-files" disabled>${icon("trash")}删除所选</button></div></div><section class="panel">${data.items.length ? `<div class="table-wrap"><table><thead><tr><th class="table-checkbox"><input id="select-all-files" type="checkbox" aria-label="选择本页所有可用文件"></th><th>文件名称 / 路径</th><th>类型 / 大小</th><th>文件标签</th><th>操作</th></tr></thead><tbody>${data.items.map((f) => `<tr><td class="table-checkbox"><input type="checkbox" data-file-check="${e(f.relpath)}" aria-label="选择 ${e(f.relpath)}" ${f.missing ? "disabled" : ""}></td><td><div class="file-title-wrap"><span class="type-icon">${kindIcon(f.relpath)}</span><button class="text-button file-name" data-action="preview-file" data-path="${e(f.relpath)}">${e(f.relpath)}</button></div></td><td>${e(kind(f.relpath))}<span class="cell-subtitle">${f.missing ? "文件已丢失" : size(f.size)}</span></td><td><div class="tag-line">${tagHTML(f.tags) || '<span class="muted">—</span>'}</div></td><td><div class="table-actions"><button class="icon-button" data-action="preview-file" data-path="${e(f.relpath)}" aria-label="预览 ${e(f.relpath)}">${icon("search")}</button><a class="icon-button" href="${e(fileURL(f.relpath, true))}" download aria-label="下载 ${e(f.relpath)}">${icon("download")}</a></div></td></tr>`).join("")}</tbody></table></div>` : empty("还没有匹配的资料", "可以导入图片、视频或数据文件，也可以扫描直接复制到实验目录中的文件。", button("import", "导入资料", "upload", "", true))}<footer class="table-footer"><span>共 ${data.total} 个文件 · 每页 200 项</span><div class="toolbar-group"><button class="button small" data-action="files-previous" ${state.filePage === 0 ? "disabled" : ""}>上一页</button><button class="button small" data-action="files-next" ${!data.has_more ? "disabled" : ""}>下一页</button></div></footer></section>`;
+  const isGrid = state.fileViewMode === "grid";
+  const gridBody = `<div class="file-card-grid">${data.items
+    .map((f) => {
+      const isImg = kind(f.relpath) === "图片" && !f.missing;
+      const baseName = f.relpath.split("/").pop() || f.relpath;
+      return `<article class="file-grid-card">
+        <div class="file-grid-top">
+          <input type="checkbox" data-file-check="${e(f.relpath)}" aria-label="选择 ${e(f.relpath)}" ${f.missing ? "disabled" : ""}>
+          <span class="file-grid-kind">${e(kind(f.relpath))} · ${f.missing ? "已丢失" : size(f.size)}</span>
+          <a class="cond-icon-btn" href="${e(fileURL(f.relpath, true))}" download aria-label="下载 ${e(baseName)}" title="下载">${icon("download")}</a>
+        </div>
+        <button type="button" class="file-grid-preview" data-action="preview-file" data-path="${e(f.relpath)}" title="${e(f.relpath)}">
+          ${isImg ? `<img src="${e(fileURL(f.relpath))}" alt="${e(baseName)}" loading="lazy" />` : `<div class="file-grid-placeholder">${kindIcon(f.relpath)}<span>${e(kind(f.relpath))}</span></div>`}
+        </button>
+        <div class="file-grid-info">
+          <button type="button" class="text-button file-grid-name" data-action="preview-file" data-path="${e(f.relpath)}" title="${e(f.relpath)}">${e(baseName)}</button>
+          <small class="file-grid-path" title="${e(f.relpath)}">${e(f.relpath)}</small>
+          ${f.tags?.length ? `<div class="tag-line">${tagHTML(f.tags)}</div>` : ""}
+        </div>
+      </article>`;
+    })
+    .join("")}</div>`;
+  const tableBody = `<div class="table-wrap"><table><thead><tr><th class="table-checkbox"><input id="select-all-files" type="checkbox" aria-label="选择本页所有可用文件"></th><th>文件名称 / 路径</th><th>类型 / 大小</th><th>文件标签</th><th>操作</th></tr></thead><tbody>${data.items.map((f) => `<tr><td class="table-checkbox"><input type="checkbox" data-file-check="${e(f.relpath)}" aria-label="选择 ${e(f.relpath)}" ${f.missing ? "disabled" : ""}></td><td><div class="file-title-wrap"><span class="type-icon">${kindIcon(f.relpath)}</span><button class="text-button file-name" data-action="preview-file" data-path="${e(f.relpath)}">${e(f.relpath)}</button></div></td><td>${e(kind(f.relpath))}<span class="cell-subtitle">${f.missing ? "文件已丢失" : size(f.size)}</span></td><td><div class="tag-line">${tagHTML(f.tags) || '<span class="muted">—</span>'}</div></td><td><div class="table-actions"><button class="icon-button" data-action="preview-file" data-path="${e(f.relpath)}" aria-label="预览 ${e(f.relpath)}">${icon("search")}</button><a class="icon-button" href="${e(fileURL(f.relpath, true))}" download aria-label="下载 ${e(f.relpath)}">${icon("download")}</a></div></td></tr>`).join("")}</tbody></table></div>`;
+  return `${nasReadOnly() ? "" : `<div id="files-quick-drop" class="quick-file-drop">${icon("upload")}<span>将图片、视频或数据文件直接拖到此处，一键归档并校验 SHA256</span><button type="button" class="button small" data-action="quick-files-upload">选择文件直传</button></div>`}
+  <div class="toolbar"><div class="toolbar-group"><div class="search-box">${icon("search")}<input id="file-query" aria-label="筛选文件名或标签" value="${e(state.fileQuery)}" placeholder="按文件名或文件标签查找"></div><select id="file-role" aria-label="文件角色"><option value="">全部资料</option>${state.session.roles.map((r) => `<option value="${e(r.role)}" ${state.fileRole === r.role ? "selected" : ""}>${e(r.label)}</option>`).join("")}</select></div><div class="toolbar-group"><div class="cond-layout-switch" role="group" aria-label="文件显示方式"><button type="button" class="cond-layout-btn ${isGrid ? "active" : ""}" data-action="file-view-mode" data-mode="grid">${icon("grid")}<span>缩略图</span></button><button type="button" class="cond-layout-btn ${!isGrid ? "active" : ""}" data-action="file-view-mode" data-mode="list">${icon("list")}<span>列表</span></button></div>${button("scan", "扫描目录", "refresh")}${state.view === "experiment" ? button("import", "导入窗口", "upload") : ""}</div></div><div class="toolbar"><span id="selected-count" class="files-toolbar-count">共 ${data.total} 个文件</span><div class="toolbar-group">${isGrid && data.items.length ? '<label class="checkbox-label"><input id="select-all-files" type="checkbox">全选本页</label>' : ""}<button class="button small" id="file-tag-button" data-action="edit-file-tags" disabled>${icon("tag")}批量标签</button><button class="button small danger" id="file-delete-button" data-action="delete-files" disabled>${icon("trash")}删除所选</button></div></div><section class="panel">${data.items.length ? (isGrid ? gridBody : tableBody) : empty("还没有匹配的资料", "可以直接拖拽文件到上方快速上传，或扫描实验目录。", button("import", "导入资料", "upload", "", true))}<footer class="table-footer"><span>共 ${data.total} 个文件 · 每页 200 项</span><div class="toolbar-group"><button class="button small" data-action="files-previous" ${state.filePage === 0 ? "disabled" : ""}>上一页</button><button class="button small" data-action="files-next" ${!data.has_more ? "disabled" : ""}>下一页</button></div></footer></section>`;
 }
 function syncStatusHTML(data) {
   const settings = data.settings,
@@ -1889,12 +2372,1096 @@ function hydratePage() {
       });
     updateSelection();
   });
-  document.querySelectorAll(".step-images img").forEach((image) =>
+  document.querySelectorAll(".step-images img, .cond-hero-img, .cond-thumb img, .file-grid-preview img").forEach((image) =>
     image.addEventListener("error", () => {
       image.hidden = true;
     }),
   );
+  $("quick-exp-status")?.addEventListener("change", async (event) => {
+    const select = event.target;
+    const nextStatus = select.value;
+    if (!state.meta || nextStatus === state.meta.status) return;
+    select.disabled = true;
+    try {
+      const updated = await runAction("experiments.update", {
+        exp_id: state.meta.id,
+        expected_revision: state.meta.revision,
+        changes: { status: nextStatus },
+      });
+      state.meta = updated;
+      select.className = `quick-status-select status-${updated.status}`;
+      toast(`状态已切换为「${statuses[updated.status] || updated.status}」`);
+    } catch (error) {
+      select.value = state.meta.status;
+      toast(errorText(error), true);
+    } finally {
+      select.disabled = nasReadOnly();
+    }
+  });
+  const condQueryInput = $("cond-query");
+  if (condQueryInput) {
+    let condSearchTimer = null;
+    condQueryInput.addEventListener("input", () => {
+      const val = condQueryInput.value;
+      clearTimeout(condSearchTimer);
+      condSearchTimer = setTimeout(() => {
+        state.condQuery = val;
+        refreshConditionsView();
+        const fresh = $("cond-query");
+        if (fresh) {
+          fresh.focus();
+          fresh.setSelectionRange(val.length, val.length);
+        }
+      }, 180);
+    });
+  }
+  $("cond-sort")?.addEventListener("change", (event) => {
+    state.condSort = event.target.value;
+    refreshConditionsView();
+  });
+  document.querySelectorAll("[data-cond-compare]").forEach((input) =>
+    input.addEventListener("change", () => {
+      const cid = input.dataset.condCompare;
+      if (input.checked) {
+        if (state.condCompare.size >= 4) {
+          input.checked = false;
+          toast("每次最多选择 4 组工艺条件并排对比", true);
+          return;
+        }
+        state.condCompare.add(cid);
+      } else {
+        state.condCompare.delete(cid);
+      }
+      refreshConditionsView();
+    }),
+  );
+  document.querySelectorAll("[data-cond-status]").forEach((select) =>
+    select.addEventListener("change", async () => {
+      const cid = select.dataset.condStatus;
+      const nextStatus = select.value;
+      select.disabled = true;
+      try {
+        const updated = await runAction("conditions.status", {
+          exp_id: state.expId,
+          expected_revision: state.meta.revision,
+          cond_id: cid,
+          status: nextStatus,
+        });
+        state.meta = updated;
+        refreshConditionsView();
+        toast(`已标记为「${conditionStatusInfo[nextStatus]?.label || nextStatus}」`);
+      } catch (error) {
+        toast(errorText(error), true);
+        await renderPage();
+      }
+    }),
+  );
+  document.querySelectorAll(".condition-card").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      if (event.target.closest("button, input, select, a, label")) return;
+      state.condPasteTarget = card.dataset.condId;
+      document
+        .querySelectorAll(".condition-card.paste-active")
+        .forEach((el) => el.classList.remove("paste-active"));
+      card.classList.add("paste-active");
+    });
+    card.addEventListener("focus", () => {
+      state.condPasteTarget = card.dataset.condId;
+      document
+        .querySelectorAll(".condition-card.paste-active")
+        .forEach((el) => el.classList.remove("paste-active"));
+      card.classList.add("paste-active");
+    });
+  });
+  if (!nasReadOnly()) {
+    document.querySelectorAll("[data-cond-drop]").forEach((zone) => {
+      let dragDepth = 0;
+      zone.addEventListener("dragenter", (event) => {
+        if (!event.dataTransfer?.types?.includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dragDepth++;
+        zone.classList.add("drag-over");
+      });
+      zone.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer?.types?.includes("Files")) return;
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      zone.addEventListener("dragleave", (event) => {
+        if (!event.dataTransfer?.types?.includes("Files")) return;
+        event.stopPropagation();
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) zone.classList.remove("drag-over");
+      });
+      zone.addEventListener("drop", async (event) => {
+        if (!event.dataTransfer?.files?.length) return;
+        event.preventDefault();
+        event.stopPropagation();
+        dragDepth = 0;
+        zone.classList.remove("drag-over");
+        const cid = zone.dataset.condDrop;
+        await quickUploadToCondition(cid, event.dataTransfer.files);
+      });
+    });
+    const quickDrop = $("files-quick-drop");
+    if (quickDrop) {
+      quickDrop.addEventListener("dragover", (event) => {
+        if (!event.dataTransfer?.types?.includes("Files")) return;
+        event.preventDefault();
+        quickDrop.classList.add("drag-over");
+      });
+      quickDrop.addEventListener("dragleave", () =>
+        quickDrop.classList.remove("drag-over"),
+      );
+      quickDrop.addEventListener("drop", async (event) => {
+        event.preventDefault();
+        quickDrop.classList.remove("drag-over");
+        if (event.dataTransfer?.files?.length)
+          await quickImportFiles(event.dataTransfer.files);
+      });
+    }
+  }
 }
+function refreshConditionsView() {
+  if (state.view !== "experiment" || state.tab !== "conditions" || !state.meta)
+    return;
+  const panel = $("detail-panel");
+  if (!panel) return;
+  panel.innerHTML = conditionsSection(state.meta);
+  const tabBtn = $("detail-tab-conditions");
+  if (tabBtn)
+    tabBtn.textContent = `工艺条件 · ${(state.meta.process_conditions || []).length}`;
+  const filesBtn = $("detail-tab-files");
+  if (filesBtn)
+    filesBtn.textContent = `文件资料 · ${state.meta.file_count || 0}`;
+  hydratePage();
+  applyNASReadOnly();
+}
+function pickLocalFiles(onSelected, accept = "") {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  if (accept) input.accept = accept;
+  input.addEventListener("change", () => {
+    if (input.files?.length) onSelected(input.files);
+  });
+  input.click();
+}
+async function quickUploadToCondition(condId, fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length || !state.meta || nasReadOnly()) return;
+  const cond = (state.meta.process_conditions || []).find(
+    (c) => c.id === condId,
+  );
+  if (!cond) return;
+  const card = document.querySelector(`.condition-card[data-cond-id="${condId}"]`);
+  card?.classList.add("uploading");
+  toast(`正在上传 ${files.length} 个文件到「${cond.name}」…`);
+  try {
+    const uploadIds = [];
+    for (const file of files) {
+      const uploaded = await uploadFile(
+        { file, relative: file.name, tagsText: cond.name },
+        state.expId,
+        false,
+      );
+      uploadIds.push(uploaded.id);
+    }
+    const updated = await runAction("conditions.attach", {
+      exp_id: state.expId,
+      expected_revision: state.meta.revision,
+      cond_id: condId,
+      upload_ids: uploadIds,
+    });
+    state.meta = updated;
+    const newCond = (updated.process_conditions || []).find(
+      (c) => c.id === condId,
+    );
+    if (newCond?.images?.length) {
+      state.condActiveImage.set(condId, newCond.images.length - 1);
+    }
+    refreshConditionsView();
+    toast(`已归档 ${files.length} 个文件到「${cond.name}」`);
+  } catch (error) {
+    toast("上传失败：" + errorText(error), true);
+    await renderPage();
+  } finally {
+    card?.classList.remove("uploading");
+  }
+}
+async function quickImportFiles(fileList) {
+  const files = [...(fileList || [])];
+  if (!files.length || !state.expId || nasReadOnly()) return;
+  toast(`正在上传并导入 ${files.length} 个文件…`);
+  try {
+    const uploadIds = [];
+    for (const file of files) {
+      const uploaded = await uploadFile(
+        { file, relative: file.name, tagsText: "" },
+        state.expId,
+        false,
+      );
+      uploadIds.push(uploaded.id);
+    }
+    const result = await runAction("files.import", {
+      exp_id: state.expId,
+      upload_ids: uploadIds,
+      role: "auto",
+      deduplicate: true,
+    });
+    toast(
+      `已导入 ${result.imported.length} 个${result.duplicates.length ? `，重复跳过 ${result.duplicates.length} 个` : ""}`,
+    );
+    await renderPage();
+  } catch (error) {
+    toast("导入失败：" + errorText(error), true);
+  }
+}
+function kvRowHTML(prefix, key = "", value = "", keyPh = "参数名称", valPh = "参数值") {
+  return `<div class="parameter-row cond-kv-row" data-kv-group="${prefix}"><input name="${prefix}_key" data-scientific aria-label="${keyPh}" value="${e(key)}" placeholder="${keyPh}"><input name="${prefix}_value" data-scientific aria-label="${valPh}" value="${e(value)}" placeholder="${valPh}"><button type="button" class="icon-button" data-action="remove-parameter" aria-label="删除行">${icon("close")}</button></div>`;
+}
+function collectKVRows(containerId) {
+  const out = {};
+  const seen = new Set();
+  const container = $(containerId);
+  if (!container) return out;
+  for (const row of container.querySelectorAll(".cond-kv-row")) {
+    const [kInput, vInput] = row.querySelectorAll("input");
+    const k = (kInput?.value || "").trim();
+    const v = (vInput?.value || "").trim();
+    if (!k && !v) continue;
+    if (!k) throw new Error("参数或指标名称不能为空");
+    if (seen.has(k)) throw new Error(`存在重复名称：${k}`);
+    seen.add(k);
+    out[k] = v;
+  }
+  return out;
+}
+function autoNameFromParams(params) {
+  const entries = Object.entries(params || {}).filter(([, v]) => String(v || "").trim());
+  if (!entries.length) return "";
+  return entries
+    .slice(0, 3)
+    .map(([, v]) => String(v).trim())
+    .join(" · ");
+}
+async function openConditionEditor(condId = "", { cloneFromId = "" } = {}) {
+  const meta = await api("experiment?" + query({ exp_id: state.expId }));
+  state.meta = meta;
+  const list = meta.process_conditions || [];
+  const editing = condId ? list.find((c) => c.id === condId) : null;
+  const cloning = cloneFromId ? list.find((c) => c.id === cloneFromId) : null;
+  if (condId && !editing) throw new Error("工艺条件不存在，请刷新页面");
+  const lastCond = list.at(-1);
+
+  let initName = "";
+  let initSample = "";
+  let initStatus = "pending";
+  let initParams = {};
+  let initMetrics = {};
+  let initNote = "";
+  let currentImages = [];
+  let currentFiles = [];
+
+  if (editing) {
+    initName = editing.name || "";
+    initSample = editing.sample || "";
+    initStatus = editing.status || "pending";
+    initParams = { ...(editing.params || {}) };
+    initMetrics = { ...(editing.metrics || {}) };
+    initNote = editing.note || "";
+    currentImages = (editing.images || []).map((a) => ({ ...a }));
+    currentFiles = (editing.files || []).map((a) => ({ ...a }));
+  } else if (cloning) {
+    initName = `${cloning.name} (新)`;
+    initSample = "";
+    initStatus = "pending";
+    initParams = { ...(cloning.params || {}) };
+    initMetrics = Object.fromEntries(Object.keys(cloning.metrics || {}).map((k) => [k, ""]));
+  } else if (lastCond) {
+    initParams = { ...(lastCond.params || {}) };
+    initMetrics = Object.fromEntries(Object.keys(lastCond.metrics || {}).map((k) => [k, ""]));
+  } else if (meta.params && Object.keys(meta.params).length) {
+    initParams = { ...meta.params };
+  }
+
+  const pendingFiles = [];
+
+  const renderEditorAttachments = () => {
+    const imgBox = $("cond-edit-images");
+    const fileBox = $("cond-edit-files");
+    const pendingBox = $("cond-edit-pending");
+    if (imgBox) {
+      imgBox.innerHTML = currentImages.length
+        ? `<div class="cond-edit-img-grid">${currentImages
+            .map(
+              (img, i) => `<div class="cond-edit-img-card" data-img-index="${i}">
+                <div class="cond-edit-img-thumb">
+                  <img src="${e(fileURL(img.path))}" alt="${e(img.name)}" loading="lazy" />
+                  ${i === 0 ? '<span class="cond-cover-tag">封面</span>' : `<button type="button" class="cond-cover-btn" data-edit-cover="${i}">设为封面</button>`}
+                  <button type="button" class="cond-remove-img-btn" data-edit-remove-img="${i}" title="移出此条件（磁盘原文件保留）">${icon("close")}</button>
+                </div>
+                <input type="text" class="cond-caption-input" data-edit-caption="${i}" value="${e(img.caption || "")}" placeholder="图片说明，如 500x SEM" aria-label="${e(img.name)} 说明" />
+              </div>`,
+            )
+            .join("")}</div>`
+        : '<p class="field-hint">尚未关联图片，可在下方拖拽、选择或按 Ctrl+V 粘贴截图。</p>';
+    }
+    if (fileBox) {
+      fileBox.innerHTML = currentFiles.length
+        ? `<div class="cond-files">${currentFiles
+            .map(
+              (f, i) => `<span class="cond-file-chip">${icon("file")}<span>${e(f.name)}</span><button type="button" class="cond-chip-x" data-edit-remove-file="${i}" aria-label="移出 ${e(f.name)}">×</button></span>`,
+            )
+            .join("")}</div>`
+        : "";
+    }
+    if (pendingBox) {
+      pendingBox.innerHTML = pendingFiles.length
+        ? `<div class="cond-pending-list">${pendingFiles
+            .map(
+              (f, i) => `<span class="cond-pending-chip">${icon("upload")}<span>${e(f.name)} (${size(f.size)})</span><button type="button" class="cond-chip-x" data-edit-remove-pending="${i}" aria-label="取消上传 ${e(f.name)}">×</button></span>`,
+            )
+            .join("")}</div>`
+        : "";
+    }
+  };
+
+  const paramRowsHTML =
+    Object.entries(initParams)
+      .map(([k, v]) => kvRowHTML("cparam", k, parameterValue(v) === "未填写" ? "" : String(v), "工艺参数名，如 退火温度", "参数值，如 350 °C"))
+      .join("") || kvRowHTML("cparam", "", "", "工艺参数名，如 退火温度", "参数值，如 350 °C");
+  const metricRowsHTML =
+    Object.entries(initMetrics)
+      .map(([k, v]) => kvRowHTML("cmetric", k, v == null ? "" : String(v), "测量指标，如 迁移率", "数值与单位"))
+      .join("") || kvRowHTML("cmetric", "", "", "测量指标，如 迁移率", "数值与单位");
+
+  const html = `<div class="form-grid">
+    <div class="form-field wide">
+      <div class="cond-name-label-row"><label for="cond-field-name">条件名称 *</label><button type="button" class="text-button" id="cond-auto-name">${icon("sparkles")}按参数自动命名</button></div>
+      <input id="cond-field-name" name="name" data-scientific value="${e(initName)}" placeholder="例如 350 °C · 20 min 或 功率 120 W" required />
+    </div>
+    <div class="form-field"><label for="cond-field-sample">样品 / 晶圆子编号</label><input id="cond-field-sample" name="sample" data-scientific value="${e(initSample)}" placeholder="例如 S12-A2（选填）" /></div>
+    <div class="form-field"><label for="cond-field-status">条件评估状态</label><select id="cond-field-status" name="status">${Object.entries(
+      conditionStatusInfo,
+    )
+      .map(
+        ([k, info]) =>
+          `<option value="${k}" ${initStatus === k ? "selected" : ""}>${info.short}</option>`,
+      )
+      .join("")}</select></div>
+  </div>
+  <div class="form-divider">工艺参数（变化参数将自动在矩形块高亮）</div>
+  <div id="cond-param-rows">${paramRowsHTML}</div>
+  <button type="button" class="button small" id="cond-add-param">${icon("plus")}添加工艺参数</button>
+  <div class="form-divider">结果指标（选填，如膜厚、迁移率、粗糙度、良率）</div>
+  <div id="cond-metric-rows">${metricRowsHTML}</div>
+  <button type="button" class="button small" id="cond-add-metric">${icon("plus")}添加结果指标</button>
+  <div class="form-divider">现场现象与观察备注</div>
+  <div class="form-field"><textarea id="cond-field-note" name="note" data-scientific rows="3" placeholder="记录形貌特征、均匀性、异常现象等…">${e(initNote)}</textarea></div>
+  <div class="form-divider">实拍图与数据文件</div>
+  <div id="cond-edit-images"></div>
+  <div id="cond-edit-files"></div>
+  <div id="cond-editor-drop" class="cond-editor-drop">
+    ${icon("upload")}
+    <div><strong>拖入图片 / 文件，点此选择，或直接按 Ctrl+V 粘贴截图</strong><small>支持多选；保存时自动归档并计算 SHA256</small></div>
+    <button type="button" class="button small" id="cond-editor-choose">选择文件</button>
+  </div>
+  <div id="cond-edit-pending"></div>`;
+
+  openDialog(
+    editing ? `编辑工艺条件 · ${editing.name}` : cloning ? "复制参数新建条件" : "添加工艺条件",
+    html,
+    async () => {
+      const name = ($("cond-field-name").value || "").trim();
+      if (!name) throw new Error("请填写工艺条件名称");
+      const params = collectKVRows("cond-param-rows");
+      const metrics = collectKVRows("cond-metric-rows");
+      const uploadIds = [];
+      for (const file of pendingFiles) {
+        const uploaded = await uploadFile(
+          { file, relative: file.name, tagsText: name },
+          state.expId,
+          false,
+        );
+        uploadIds.push(uploaded.id);
+      }
+      const payload = {
+        exp_id: state.expId,
+        expected_revision: meta.revision,
+        name,
+        sample: ($("cond-field-sample").value || "").trim(),
+        status: $("cond-field-status").value,
+        params,
+        metrics,
+        note: ($("cond-field-note").value || "").trim(),
+        images: currentImages,
+        files: currentFiles,
+        upload_ids: uploadIds,
+      };
+      if (editing) payload.id = editing.id;
+      const updated = await runAction("conditions.save", payload);
+      state.meta = updated;
+      closeDialog(true);
+      toast(editing ? "工艺条件已更新" : "工艺条件已添加");
+      refreshConditionsView();
+    },
+    { wide: true, label: editing ? "保存修改" : "保存条件", kicker: "工艺条件矩阵" },
+  );
+
+  renderEditorAttachments();
+  const addPending = (files) => {
+    for (const f of files || []) pendingFiles.push(f);
+    if (state.dialog) state.dialog.dirty = true;
+    renderEditorAttachments();
+  };
+  state.dialog.onPasteFiles = addPending;
+
+  $("cond-add-param").addEventListener("click", () => {
+    $("cond-param-rows").insertAdjacentHTML(
+      "beforeend",
+      kvRowHTML("cparam", "", "", "工艺参数名", "参数值"),
+    );
+    setupScientificInputs();
+    $("cond-param-rows").lastElementChild?.querySelector("input")?.focus();
+  });
+  $("cond-add-metric").addEventListener("click", () => {
+    $("cond-metric-rows").insertAdjacentHTML(
+      "beforeend",
+      kvRowHTML("cmetric", "", "", "测量指标", "数值与单位"),
+    );
+    setupScientificInputs();
+    $("cond-metric-rows").lastElementChild?.querySelector("input")?.focus();
+  });
+  $("cond-auto-name").addEventListener("click", () => {
+    try {
+      const p = collectKVRows("cond-param-rows");
+      const generated = autoNameFromParams(p);
+      if (!generated) {
+        toast("请先填写至少一项工艺参数值", true);
+        return;
+      }
+      $("cond-field-name").value = generated;
+      $("cond-field-name").dispatchEvent(new Event("input", { bubbles: true }));
+    } catch (error) {
+      toast(errorText(error), true);
+    }
+  });
+  $("cond-editor-choose").addEventListener("click", () => pickLocalFiles(addPending));
+  const dropZone = $("cond-editor-drop");
+  dropZone.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    dropZone.classList.add("drag-over");
+  });
+  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+  dropZone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    dropZone.classList.remove("drag-over");
+    if (event.dataTransfer?.files?.length) addPending(event.dataTransfer.files);
+  });
+
+  const ac = new AbortController();
+  state.dialog.cleanup = () => ac.abort();
+  $("dialog-content").addEventListener(
+    "click",
+    (event) => {
+      const coverBtn = event.target.closest("[data-edit-cover]");
+      if (coverBtn) {
+        const idx = Number(coverBtn.dataset.editCover);
+        if (idx > 0 && idx < currentImages.length) {
+          const [moved] = currentImages.splice(idx, 1);
+          currentImages.unshift(moved);
+          if (state.dialog) state.dialog.dirty = true;
+          renderEditorAttachments();
+        }
+        return;
+      }
+      const rmImg = event.target.closest("[data-edit-remove-img]");
+      if (rmImg) {
+        currentImages.splice(Number(rmImg.dataset.editRemoveImg), 1);
+        if (state.dialog) state.dialog.dirty = true;
+        renderEditorAttachments();
+        return;
+      }
+      const rmFile = event.target.closest("[data-edit-remove-file]");
+      if (rmFile) {
+        currentFiles.splice(Number(rmFile.dataset.editRemoveFile), 1);
+        if (state.dialog) state.dialog.dirty = true;
+        renderEditorAttachments();
+        return;
+      }
+      const rmPending = event.target.closest("[data-edit-remove-pending]");
+      if (rmPending) {
+        pendingFiles.splice(Number(rmPending.dataset.editRemovePending), 1);
+        renderEditorAttachments();
+      }
+    },
+    { signal: ac.signal },
+  );
+  $("dialog-content").addEventListener(
+    "input",
+    (event) => {
+      const cap = event.target.closest("[data-edit-caption]");
+      if (cap) {
+        const idx = Number(cap.dataset.editCaption);
+        if (currentImages[idx]) currentImages[idx].caption = cap.value;
+      }
+    },
+    { signal: ac.signal },
+  );
+}
+function condAxisRowHTML(name = "", values = "") {
+  return `<div class="template-axis-row cond-axis-row"><input type="text" data-axis-name value="${e(name)}" placeholder="变化参数名，如 退火温度" aria-label="变化参数名"><input type="text" data-axis-values value="${e(values)}" placeholder="多个取值用逗号隔开，如 300 °C, 350 °C, 400 °C" aria-label="参数取值列表"><button type="button" class="icon-button" data-action="cond-remove-axis" aria-label="删除变量">${icon("close")}</button></div>`;
+}
+async function openBatchConditionsModal() {
+  const meta = await api("experiment?" + query({ exp_id: state.expId }));
+  state.meta = meta;
+  const remaining = Math.max(0, 100 - (meta.process_conditions || []).length);
+  if (remaining === 0) throw new Error("当前实验已达 100 组工艺条件上限");
+  const baseParams = meta.params || {};
+  const html = `<p class="field-hint">在当前实验内快速生成一组工艺条件矩形块（例如 3 个温度 × 2 个时长 = 6 块），生成后直接往各矩形块拖入实拍图即可。</p>
+  <div class="form-divider">变化参数组合（最多 3 个维度，单次最多生成 ${Math.min(60, remaining)} 组）</div>
+  <div id="cond-batch-axes">${condAxisRowHTML("退火温度", "300 °C, 350 °C, 400 °C")}${condAxisRowHTML("保持时间", "10 min, 20 min")}</div>
+  <button type="button" class="button small" id="cond-batch-add-axis">${icon("plus")}添加变化参数</button>
+  <div class="form-grid cond-batch-options">
+    <div class="form-field"><label for="cond-batch-sample-prefix">样品子编号前缀（选填）</label><input id="cond-batch-sample-prefix" value="${e(meta.device ? meta.device + "-" : "")}" placeholder="如 S12-，自动生成 S12-1, S12-2…" /></div>
+    <div class="form-field"><label class="checkbox-label cond-batch-check"><input id="cond-batch-inherit" type="checkbox" ${Object.keys(baseParams).length ? "checked" : ""}>继承实验公共基准参数（${Object.keys(baseParams).length} 项）</label></div>
+  </div>
+  <div class="form-divider">预览将生成的矩形条件块</div>
+  <div id="cond-batch-preview" class="cond-batch-preview"></div>`;
+
+  const buildBatchItems = () => {
+    const axes = [];
+    for (const row of document.querySelectorAll("#cond-batch-axes .cond-axis-row")) {
+      const name = row.querySelector("[data-axis-name]").value.trim();
+      const rawVals = row.querySelector("[data-axis-values]").value;
+      const vals = rawVals
+        .split(/[,，;\n；]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!name && !vals.length) continue;
+      if (!name || !vals.length)
+        throw new Error("请完整填写变化参数的名称与取值列表");
+      axes.push({ name, vals });
+    }
+    if (!axes.length) throw new Error("请至少填写一个变化参数及其取值");
+    let combos = [{}];
+    for (const axis of axes) {
+      const next = [];
+      for (const combo of combos) {
+        for (const val of axis.vals) {
+          next.push({ ...combo, [axis.name]: val });
+          if (next.length > Math.min(60, remaining))
+            throw new Error(`组合总数超过上限（最多 ${Math.min(60, remaining)} 组）`);
+        }
+      }
+      combos = next;
+    }
+    const inherit = $("cond-batch-inherit")?.checked;
+    const prefix = ($("cond-batch-sample-prefix")?.value || "").trim();
+    const startIdx = (meta.process_conditions || []).length;
+    return combos.map((combo, idx) => ({
+      name: Object.values(combo).join(" · "),
+      sample: prefix ? `${prefix}${startIdx + idx + 1}` : "",
+      status: "pending",
+      params: inherit ? { ...baseParams, ...combo } : combo,
+    }));
+  };
+
+  const updatePreview = () => {
+    const box = $("cond-batch-preview");
+    const submit = $("dialog-submit");
+    if (!box) return;
+    try {
+      const items = buildBatchItems();
+      box.innerHTML = `<p class="field-hint">将生成 <strong>${items.length}</strong> 个矩形条件块：</p><div class="cond-batch-chips">${items
+        .map(
+          (it, i) =>
+            `<span class="cond-batch-chip"><b>#${i + 1}</b> ${scientificHTML(it.name)}${it.sample ? ` <small>(${e(it.sample)})</small>` : ""}</span>`,
+        )
+        .join("")}</div>`;
+      submit.disabled = false;
+      submit.textContent = `确认生成 ${items.length} 组条件`;
+      $("dialog-error").hidden = true;
+    } catch (error) {
+      box.innerHTML = `<p class="inline-error">${e(errorText(error))}</p>`;
+      submit.disabled = true;
+      submit.textContent = "确认生成";
+    }
+  };
+
+  openDialog(
+    "批量生成工艺条件矩阵",
+    html,
+    async () => {
+      const items = buildBatchItems();
+      const updated = await runAction("conditions.batch", {
+        exp_id: state.expId,
+        expected_revision: meta.revision,
+        items,
+      });
+      state.meta = updated;
+      closeDialog(true);
+      toast(`已批量生成 ${items.length} 组工艺条件`);
+      refreshConditionsView();
+    },
+    { wide: true, label: "确认生成", kicker: "工艺矩阵" },
+  );
+  const ac = new AbortController();
+  state.dialog.cleanup = () => ac.abort();
+  updatePreview();
+  $("dialog-content").addEventListener("input", updatePreview, { signal: ac.signal });
+  $("dialog-content").addEventListener("change", updatePreview, { signal: ac.signal });
+  $("cond-batch-add-axis").addEventListener("click", () => {
+    if (document.querySelectorAll("#cond-batch-axes .cond-axis-row").length >= 3) {
+      toast("最多同时组合 3 个变化参数", true);
+      return;
+    }
+    $("cond-batch-axes").insertAdjacentHTML("beforeend", condAxisRowHTML());
+    updatePreview();
+  });
+  $("dialog-content").addEventListener(
+    "click",
+    (event) => {
+      const rm = event.target.closest('[data-action="cond-remove-axis"]');
+      if (rm) {
+        rm.closest(".cond-axis-row").remove();
+        updatePreview();
+      }
+    },
+    { signal: ac.signal },
+  );
+}
+async function openConditionFilePicker(condId) {
+  const [meta, fileRes] = await Promise.all([
+    api("experiment?" + query({ exp_id: state.expId })),
+    api("files?" + query({ exp_id: state.expId, limit: 500 })),
+  ]);
+  state.meta = meta;
+  const cond = (meta.process_conditions || []).find((c) => c.id === condId);
+  if (!cond) throw new Error("工艺条件不存在");
+  const already = new Set([
+    ...(cond.images || []).map((a) => a.path),
+    ...(cond.files || []).map((a) => a.path),
+  ]);
+  const candidates = fileRes.items.filter((f) => !f.missing && !already.has(f.relpath));
+  const picked = new Set();
+
+  const renderCandidates = (kw = "") => {
+    const q = kw.trim().toLowerCase();
+    const shown = q
+      ? candidates.filter((f) =>
+          (f.relpath + " " + (f.tags || []).join(" ")).toLowerCase().includes(q),
+        )
+      : candidates;
+    $("cond-pick-list").innerHTML = shown.length
+      ? `<div class="cond-pick-grid">${shown
+          .map((f) => {
+            const isImg = kind(f.relpath) === "图片";
+            const name = f.relpath.split("/").pop();
+            const checked = picked.has(f.relpath);
+            return `<label class="cond-pick-item ${checked ? "checked" : ""}">
+              <input type="checkbox" data-pick-path="${e(f.relpath)}" ${checked ? "checked" : ""} />
+              <div class="cond-pick-thumb">${isImg ? `<img src="${e(fileURL(f.relpath))}" alt="${e(name)}" loading="lazy" />` : `<div class="file-grid-placeholder">${kindIcon(f.relpath)}</div>`}</div>
+              <div class="cond-pick-meta"><strong title="${e(f.relpath)}">${e(name)}</strong><small>${size(f.size)}</small></div>
+            </label>`;
+          })
+          .join("")}</div>`
+      : '<p class="field-hint">没有可关联的其他文件，可直接拖拽或点击「传图」上传新文件。</p>';
+  };
+
+  openDialog(
+    `为「${cond.name}」关联实验资料`,
+    `<p class="field-hint">从当前实验已有资料中勾选关联，不会重复复制原文件。</p>
+    <div class="search-box cond-pick-search">${icon("search")}<input id="cond-pick-query" data-picker-filter placeholder="按文件名或标签筛选…" /></div>
+    <div id="cond-pick-list"></div>`,
+    async () => {
+      if (!picked.size) throw new Error("请至少勾选一个文件");
+      const updated = await runAction("conditions.attach", {
+        exp_id: state.expId,
+        expected_revision: meta.revision,
+        cond_id: condId,
+        existing_paths: [...picked],
+      });
+      state.meta = updated;
+      closeDialog(true);
+      toast(`已关联 ${picked.size} 个文件到「${cond.name}」`);
+      refreshConditionsView();
+    },
+    { wide: true, label: "关联所选文件", kicker: "文件资料库" },
+  );
+  renderCandidates();
+  $("cond-pick-query").addEventListener("input", (event) =>
+    renderCandidates(event.target.value),
+  );
+  $("cond-pick-list").addEventListener("change", (event) => {
+    const cb = event.target.closest("[data-pick-path]");
+    if (!cb) return;
+    if (cb.checked) picked.add(cb.dataset.pickPath);
+    else picked.delete(cb.dataset.pickPath);
+    cb.closest(".cond-pick-item")?.classList.toggle("checked", cb.checked);
+  });
+}
+function openConditionCompare() {
+  const all = state.meta?.process_conditions || [];
+  const selected = all.filter((c) => state.condCompare.has(c.id));
+  if (selected.length < 2) {
+    toast("请先勾选至少 2 个工艺条件矩形块", true);
+    return;
+  }
+  const analysis = analyzeConditionParams(selected);
+  const activeImgIdx = new Map(selected.map((c) => [c.id, state.condActiveImage.get(c.id) || 0]));
+
+  const paramRows = analysis.keyOrder
+    .map((k) => {
+      const diff = analysis.varyingKeys.has(k);
+      return `<tr class="${diff ? "compare-diff-row" : ""}"><th>${scientificHTML(k)}${diff ? ' <span class="diff-dot" title="参数存在差异">差异</span>' : ""}</th>${selected
+        .map(
+          (c) =>
+            `<td>${c.params && Object.hasOwn(c.params, k) ? scientificHTML(parameterValue(c.params[k])) : '<span class="muted">—</span>'}</td>`,
+        )
+        .join("")}</tr>`;
+    })
+    .join("");
+  const metricRows = analysis.metricOrder
+    .map(
+      (k) =>
+        `<tr class="compare-metric-row"><th>${scientificHTML(k)}</th>${selected
+          .map(
+            (c) =>
+              `<td>${c.metrics && Object.hasOwn(c.metrics, k) ? scientificHTML(parameterValue(c.metrics[k])) : '<span class="muted">—</span>'}</td>`,
+          )
+          .join("")}</tr>`,
+    )
+    .join("");
+
+  const renderCols = () => {
+    const box = $("compare-media-grid");
+    if (!box) return;
+    box.innerHTML = selected
+      .map((c) => {
+        const imgs = c.images || [];
+        const idx = imgs.length ? Math.min(activeImgIdx.get(c.id) || 0, imgs.length - 1) : 0;
+        const hero = imgs[idx];
+        const info = conditionStatusInfo[c.status || "pending"];
+        return `<article class="compare-col status-${e(c.status || "pending")}">
+          <header class="compare-col-head">
+            <div><strong>${scientificHTML(c.name)}</strong>${c.sample ? `<small>${scientificHTML(c.sample)}</small>` : ""}</div>
+            <span class="cond-status-pill status-${e(info.cls)}">${info.short}</span>
+          </header>
+          <div class="compare-col-stage">
+            ${hero ? `<button type="button" class="compare-img-btn" data-compare-zoom="${e(c.id)}" data-index="${idx}"><img src="${e(fileURL(hero.path))}" alt="${e(hero.caption || hero.name)}" /></button><div class="compare-img-meta"><span>${scientificHTML(hero.caption || hero.name)}</span><span>${idx + 1}/${imgs.length}</span></div>` : '<div class="compare-no-img">该条件暂无图片</div>'}
+          </div>
+          ${
+            imgs.length > 1
+              ? `<div class="cond-thumb-strip">${imgs
+                  .map(
+                    (img, i) =>
+                      `<button type="button" class="cond-thumb ${i === idx ? "active" : ""}" data-compare-thumb="${e(c.id)}" data-index="${i}"><img src="${e(fileURL(img.path))}" alt="${e(img.name)}" /></button>`,
+                  )
+                  .join("")}</div>`
+              : ""
+          }
+          ${c.note ? `<p class="compare-col-note">${scientificHTML(c.note)}</p>` : ""}
+        </article>`;
+      })
+      .join("");
+  };
+
+  openDialog(
+    `并排对照 · ${selected.length} 组工艺条件`,
+    `<div class="compare-table-wrap"><table class="compare-table"><thead><tr><th>参数 / 指标</th>${selected
+      .map(
+        (c) =>
+          `<th><strong>${scientificHTML(c.name)}</strong>${c.sample ? `<small>${scientificHTML(c.sample)}</small>` : ""}</th>`,
+      )
+      .join("")}</tr></thead><tbody>${paramRows}${metricRows}</tbody></table></div>
+    <div id="compare-media-grid" class="compare-media-grid cols-${selected.length}"></div>`,
+    null,
+    { wide: true, kicker: "工艺窗口对比" },
+  );
+  const ac = new AbortController();
+  $("editor").classList.add("extra-wide");
+  state.dialog.cleanup = () => {
+    ac.abort();
+    $("editor").classList.remove("extra-wide");
+  };
+  renderCols();
+
+  $("dialog-content").addEventListener(
+    "click",
+    (event) => {
+      const thumb = event.target.closest("[data-compare-thumb]");
+      if (thumb) {
+        activeImgIdx.set(thumb.dataset.compareThumb, Number(thumb.dataset.index));
+        renderCols();
+        return;
+      }
+      const zoom = event.target.closest("[data-compare-zoom]");
+      if (zoom) {
+        openConditionLightbox(zoom.dataset.compareZoom, Number(zoom.dataset.index));
+      }
+    },
+    { signal: ac.signal },
+  );
+}
+function openConditionLightbox(condId, imgIndex = 0) {
+  let crossMode = false;
+  let zoomed = false;
+  let curCondId = condId;
+  let curIdx = imgIndex;
+
+  const getSlides = () => {
+    const all = state.meta?.process_conditions || [];
+    if (!crossMode) {
+      const c = all.find((item) => item.id === curCondId);
+      if (!c) return [];
+      return (c.images || []).map((img, idx) => ({ cond: c, img, idx }));
+    }
+    const slides = [];
+    for (const c of all) {
+      for (const [idx, img] of (c.images || []).entries()) {
+        slides.push({ cond: c, img, idx });
+      }
+    }
+    return slides;
+  };
+
+  let slidePos = 0;
+  const syncPos = () => {
+    const slides = getSlides();
+    const found = slides.findIndex(
+      (s) => s.cond.id === curCondId && s.idx === curIdx,
+    );
+    slidePos = found >= 0 ? found : 0;
+    return slides;
+  };
+
+  const render = () => {
+    const slides = syncPos();
+    if (!slides.length) {
+      closeDialog(true);
+      return;
+    }
+    const current = slides[slidePos];
+    curCondId = current.cond.id;
+    curIdx = current.idx;
+    const c = current.cond;
+    const img = current.img;
+    const info = conditionStatusInfo[c.status || "pending"];
+    const ro = nasReadOnly();
+
+    $("dialog-title").innerHTML = `${scientificHTML(c.name)} <span class="lightbox-counter">${slidePos + 1} / ${slides.length}</span>`;
+    $("dialog-content").innerHTML = `<div class="lightbox-shell">
+      <div class="lightbox-stage ${zoomed ? "zoomed" : ""}">
+        ${slides.length > 1 ? `<button type="button" class="lightbox-nav prev" data-lb="prev" aria-label="上一张">${icon("chevronLeft")}</button>` : ""}
+        <img class="lightbox-img" src="${e(fileURL(img.path))}" alt="${e(img.caption || img.name)}" />
+        ${slides.length > 1 ? `<button type="button" class="lightbox-nav next" data-lb="next" aria-label="下一张">${icon("chevronRight")}</button>` : ""}
+      </div>
+      <div class="lightbox-toolbar">
+        <div class="toolbar-group">
+          <button type="button" class="button small" data-lb="zoom">${icon("zoom")}${zoomed ? "适应窗口" : "放大原图"}</button>
+          <button type="button" class="button small ${crossMode ? "primary" : ""}" data-lb="cross">${icon("compare")}${crossMode ? "正在跨条件连播" : "跨条件连播"}</button>
+          ${!ro && current.idx > 0 ? `<button type="button" class="button small" data-lb="cover">${icon("star")}设为条件封面</button>` : ""}
+          <a class="button small" href="${e(fileURL(img.path, true))}" download>${icon("download")}下载原图</a>
+          ${!ro ? `<button type="button" class="button small danger" data-lb="detach">${icon("trash")}移出此条件</button>` : ""}
+        </div>
+        <span class="muted">快捷键：← / → 切换图片 · Z 缩放</span>
+      </div>
+      <div class="lightbox-info-panel">
+        <div class="lightbox-cond-meta">
+          <span class="cond-status-pill status-${e(info.cls)}">${info.short}</span>
+          <strong>${scientificHTML(c.name)}</strong>
+          ${c.sample ? `<span class="cond-sample">${scientificHTML(c.sample)}</span>` : ""}
+          <span class="muted">${e(img.name)}</span>
+        </div>
+        <div class="cond-params">${Object.entries(c.params || {})
+          .map(
+            ([k, v]) =>
+              `<span class="cond-param-chip varying"><span class="cond-param-k">${scientificHTML(k)}</span><strong class="cond-param-v">${scientificHTML(parameterValue(v))}</strong></span>`,
+          )
+          .join("")}${Object.entries(c.metrics || {})
+          .map(
+            ([k, v]) =>
+              `<span class="cond-metric-pill"><span>${scientificHTML(k)}</span><b>${scientificHTML(parameterValue(v))}</b></span>`,
+          )
+          .join("")}</div>
+        ${c.note ? `<p class="lightbox-note">${scientificHTML(c.note)}</p>` : ""}
+        ${
+          ro
+            ? img.caption
+              ? `<p class="field-hint">图片说明：${scientificHTML(img.caption)}</p>`
+              : ""
+            : `<div class="lightbox-caption-bar"><input id="lb-caption-input" data-picker-filter type="text" value="${e(img.caption || "")}" placeholder="添加图片说明，例如 500x SEM 边缘形貌…" aria-label="图片说明" /><button type="button" class="button small" data-lb="save-caption">保存说明</button></div>`
+        }
+      </div>
+    </div>`;
+  };
+
+  openDialog("查看图片", "", null, { wide: true, kicker: "工艺条件实拍" });
+  $("editor").classList.add("extra-wide");
+
+  const step = (delta) => {
+    const slides = getSlides();
+    if (slides.length <= 1) return;
+    const nextPos = (slidePos + delta + slides.length) % slides.length;
+    curCondId = slides[nextPos].cond.id;
+    curIdx = slides[nextPos].idx;
+    zoomed = false;
+    render();
+  };
+
+  const onKey = (event) => {
+    if (!$("editor").open) return;
+    if (event.target?.tagName === "INPUT" || event.target?.tagName === "TEXTAREA")
+      return;
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      step(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      step(1);
+    } else if (event.key === "z" || event.key === "Z") {
+      zoomed = !zoomed;
+      render();
+    }
+  };
+  const ac = new AbortController();
+  document.addEventListener("keydown", onKey, { signal: ac.signal });
+  state.dialog.cleanup = () => {
+    ac.abort();
+    $("editor").classList.remove("extra-wide");
+  };
+
+  $("dialog-content").addEventListener(
+    "click",
+    async (event) => {
+    const btn = event.target.closest("[data-lb]");
+    if (!btn) {
+      if (event.target.classList.contains("lightbox-img")) {
+        zoomed = !zoomed;
+        render();
+      }
+      return;
+    }
+    const act = btn.dataset.lb;
+    const slides = getSlides();
+    const current = slides[slidePos];
+    if (!current) return;
+    try {
+      if (act === "prev") step(-1);
+      else if (act === "next") step(1);
+      else if (act === "zoom") {
+        zoomed = !zoomed;
+        render();
+      } else if (act === "cross") {
+        crossMode = !crossMode;
+        render();
+      } else if (act === "cover") {
+        const updated = await runAction("conditions.image", {
+          exp_id: state.expId,
+          expected_revision: state.meta.revision,
+          cond_id: current.cond.id,
+          path: current.img.path,
+          set_cover: true,
+        });
+        state.meta = updated;
+        curIdx = 0;
+        state.condActiveImage.set(current.cond.id, 0);
+        refreshConditionsView();
+        render();
+        toast("已设为该条件封面图");
+      } else if (act === "save-caption") {
+        const caption = ($("lb-caption-input")?.value || "").trim();
+        const updated = await runAction("conditions.image", {
+          exp_id: state.expId,
+          expected_revision: state.meta.revision,
+          cond_id: current.cond.id,
+          path: current.img.path,
+          caption,
+        });
+        state.meta = updated;
+        refreshConditionsView();
+        render();
+        toast("图片说明已保存");
+      } else if (act === "detach") {
+        if (!confirm("从该工艺条件移出这张图片？（磁盘原文件仍保留在「文件资料」中）"))
+          return;
+        const updated = await runAction("conditions.detach", {
+          exp_id: state.expId,
+          expected_revision: state.meta.revision,
+          cond_id: current.cond.id,
+          path: current.img.path,
+        });
+        state.meta = updated;
+        curIdx = Math.max(0, curIdx - 1);
+        refreshConditionsView();
+        render();
+        toast("已从工艺条件移出，原文件保留在文件资料");
+      }
+    } catch (error) {
+      toast(errorText(error), true);
+    }
+  }, { signal: ac.signal });
+
+  render();
+}
+async function openQuickFindingsEditor() {
+  const meta = await api("experiment?" + query({ exp_id: state.expId }));
+  state.meta = meta;
+  openDialog(
+    "快速记录结果与结论",
+    `<div class="form-grid">${field("results", "结果与观察", meta.results, { type: "textarea", wide: true })}${field("conclusion", "结论与下一步", meta.conclusion, { type: "textarea", wide: true })}${field("notes", "实验备注", meta.notes, { type: "textarea", wide: true })}</div>`,
+    async (form) => {
+      const values = Object.fromEntries(form);
+      await runAction("experiments.update", {
+        exp_id: meta.id,
+        expected_revision: meta.revision,
+        changes: values,
+      });
+      closeDialog(true);
+      toast("结果与结论已保存");
+      await renderPage();
+    },
+    { wide: true, label: "保存记录", kicker: meta.id },
+  );
+}
+document.addEventListener("paste", async (event) => {
+  if (nasReadOnly()) return;
+  const items = [...(event.clipboardData?.items || [])];
+  const files = [];
+  for (const item of items) {
+    if (item.kind === "file") {
+      const f = item.getAsFile();
+      if (f) {
+        const ext = f.type === "image/jpeg" ? ".jpg" : f.type === "image/webp" ? ".webp" : ".png";
+        const stamp = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
+        const named =
+          f.name && f.name !== "image.png"
+            ? f
+            : new File([f], `paste_${stamp}_${files.length + 1}${ext}`, { type: f.type || "image/png" });
+        files.push(named);
+      }
+    }
+  }
+  if (!files.length) return;
+  if ($("editor").open && state.dialog?.onPasteFiles) {
+    event.preventDefault();
+    state.dialog.onPasteFiles(files);
+    toast(`已粘贴 ${files.length} 个文件到当前条件`);
+    return;
+  }
+  if (
+    !$("editor").open &&
+    state.view === "experiment" &&
+    state.tab === "conditions" &&
+    state.condPasteTarget
+  ) {
+    event.preventDefault();
+    await quickUploadToCondition(state.condPasteTarget, files);
+  }
+});
 function updateSelection() {
   if ($("selected-count"))
     $("selected-count").textContent = state.selected.size
@@ -3337,9 +4904,12 @@ function watchJob(job) {
   if (state.watchers.has(job.id)) return state.watchers.get(job.id);
   const promise = (async () => {
     let current = job,
-      failures = 0;
+      failures = 0,
+      attempt = 0;
     while (pendingStatuses.has(current.status)) {
-      await new Promise((resolve) => setTimeout(resolve, 550));
+      const wait = attempt === 0 ? 70 : attempt === 1 ? 140 : attempt === 2 ? 260 : 500;
+      attempt++;
+      await new Promise((resolve) => setTimeout(resolve, wait));
       try {
         current = await api("jobs/" + encodeURIComponent(job.id));
         failures = 0;
@@ -3685,7 +5255,103 @@ document.addEventListener("click", async (event) => {
         ?.focus({ preventScroll: true });
     } else if (action === "open-experiment")
       navigate("experiment", control.dataset.id);
-    else if (action === "detail-tab") {
+    else if (action === "add-condition") await openConditionEditor();
+    else if (action === "edit-condition")
+      await openConditionEditor(control.dataset.cond);
+    else if (action === "clone-condition")
+      await openConditionEditor("", { cloneFromId: control.dataset.cond });
+    else if (action === "batch-conditions") await openBatchConditionsModal();
+    else if (action === "seed-condition-from-params") {
+      const meta = await api("experiment?" + query({ exp_id: state.expId }));
+      state.meta = meta;
+      const params = meta.params || {};
+      const name = autoNameFromParams(params) || "基准工艺条件";
+      const updated = await runAction("conditions.save", {
+        exp_id: meta.id,
+        expected_revision: meta.revision,
+        name,
+        sample: meta.device || "",
+        status: "tuning",
+        params,
+      });
+      state.meta = updated;
+      refreshConditionsView();
+      toast("已由基准参数创建第一组工艺条件");
+    } else if (action === "delete-condition") {
+      const cond = (state.meta?.process_conditions || []).find(
+        (c) => c.id === control.dataset.cond,
+      );
+      if (
+        !confirm(
+          `删除工艺条件「${cond?.name || ""}」？（已上传的图片和数据原文件仍会安全保留在「文件资料」中）`,
+        )
+      )
+        return;
+      const updated = await runAction("conditions.delete", {
+        exp_id: state.expId,
+        expected_revision: state.meta.revision,
+        cond_id: control.dataset.cond,
+      });
+      state.meta = updated;
+      state.condCompare.delete(control.dataset.cond);
+      refreshConditionsView();
+      toast("工艺条件已删除");
+    } else if (action === "condition-upload") {
+      const cid = control.dataset.cond;
+      pickLocalFiles((files) => quickUploadToCondition(cid, files));
+    } else if (action === "condition-pick") {
+      await openConditionFilePicker(control.dataset.cond);
+    } else if (action === "condition-select-thumb") {
+      state.condActiveImage.set(
+        control.dataset.cond,
+        Number(control.dataset.index),
+      );
+      refreshConditionsView();
+    } else if (action === "condition-lightbox") {
+      openConditionLightbox(control.dataset.cond, Number(control.dataset.index || 0));
+    } else if (action === "condition-layout") {
+      state.condLayout = control.dataset.layout;
+      saveLocalPref("expvault.web.cond-layout", state.condLayout);
+      refreshConditionsView();
+    } else if (action === "condition-filter-status") {
+      state.condStatusFilter = control.dataset.status || "";
+      refreshConditionsView();
+    } else if (action === "condition-reset-filters") {
+      state.condStatusFilter = "";
+      state.condQuery = "";
+      state.condSort = "";
+      refreshConditionsView();
+    } else if (action === "compare-conditions") {
+      openConditionCompare();
+    } else if (action === "clear-cond-compare") {
+      state.condCompare.clear();
+      refreshConditionsView();
+    } else if (
+      action === "condition-move-prev" ||
+      action === "condition-move-next"
+    ) {
+      const list = state.meta?.process_conditions || [];
+      const ids = list.map((c) => c.id);
+      const idx = ids.indexOf(control.dataset.cond);
+      const target = action === "condition-move-prev" ? idx - 1 : idx + 1;
+      if (idx < 0 || target < 0 || target >= ids.length) return;
+      [ids[idx], ids[target]] = [ids[target], ids[idx]];
+      const updated = await runAction("conditions.reorder", {
+        exp_id: state.expId,
+        expected_revision: state.meta.revision,
+        order: ids,
+      });
+      state.meta = updated;
+      refreshConditionsView();
+    } else if (action === "quick-edit-findings") {
+      await openQuickFindingsEditor();
+    } else if (action === "file-view-mode") {
+      state.fileViewMode = control.dataset.mode;
+      saveLocalPref("expvault.web.file-view", state.fileViewMode);
+      await renderPage();
+    } else if (action === "quick-files-upload") {
+      pickLocalFiles((files) => quickImportFiles(files));
+    } else if (action === "detail-tab") {
       state.tab = control.dataset.tab;
       history.replaceState(
         null,

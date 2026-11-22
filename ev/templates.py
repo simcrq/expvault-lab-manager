@@ -22,6 +22,22 @@ def prepare(source, variants, *, copy_instruments=True, copy_notes=False, replac
         values["title"] = values["title"].strip()
         values["measurement_groups"] = [{"id":uuid.uuid4().hex,"name":group["name"],"model":group.get("model", ""),"runs":[]}
                                          for group in source.get("measurement_groups", [])] if copy_instruments else []
+        if "process_conditions" not in changes and source.get("process_conditions"):
+            values["process_conditions"] = [
+                {
+                    "id": uuid.uuid4().hex,
+                    "name": cond.get("name", ""),
+                    "sample": "",
+                    "status": "pending",
+                    "params": copy.deepcopy(cond.get("params", {})),
+                    "metrics": {},
+                    "note": "",
+                    "images": [],
+                    "files": [],
+                }
+                for cond in source.get("process_conditions", [])
+                if cond.get("name")
+            ]
         plans.append(values)
     return plans
 

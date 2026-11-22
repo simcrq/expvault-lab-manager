@@ -107,11 +107,11 @@ def merge_states(base, left, right):
         if isinstance(l, list) and isinstance(r, list) and (isinstance(b, list) or b is MISSING):
             old = b if isinstance(b, list) else []
             field = path[-1] if path else ""
-            identity = "sync_id" if field == "steps" else "id" if field in ("measurement_groups", "runs", "journal_entries") else None
+            identity = "sync_id" if field == "steps" else "id" if field in ("measurement_groups", "runs", "journal_entries", "process_conditions") else None
             if identity and all(isinstance(item, dict) and identity in item for item in old + l + r):
                 value = merge({item[identity]:item for item in old}, {item[identity]:item for item in l}, {item[identity]:item for item in r}, path)
                 return sorted(value.values(), key=lambda item: (item.get("created_at", item.get("measured_at", "")), item[identity]))
-            if field in ("history", "tags", "groups", "images", "references") or "file_tags" in path or "issues" in path:
+            if field in ("history", "tags", "groups", "images", "files", "references") or "file_tags" in path or "issues" in path:
                 # Append-only history keeps every distinct event; other sets honor removals.
                 maps = [{digest(item): item for item in values} for values in (old, l, r)]
                 keys = set(maps[1]) | set(maps[2])

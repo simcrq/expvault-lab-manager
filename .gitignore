@@ -37,6 +37,7 @@
 !/ev/__init__.py
 !/ev/backup.py
 !/ev/cli.py
+!/ev/conditions.py
 !/ev/config.py
 !/ev/db.py
 !/ev/experiment.py

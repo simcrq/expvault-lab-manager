@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     notes       TEXT DEFAULT '',
     params      TEXT DEFAULT '{}',
     measurement_groups TEXT DEFAULT '[]',
+    process_conditions TEXT DEFAULT '[]',
     experiment_groups TEXT DEFAULT '[]',
     created_at  TEXT DEFAULT '',
     updated_at  TEXT DEFAULT '',
@@ -111,6 +112,8 @@ class Database:
             exp_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(experiments)").fetchall()}
             if "measurement_groups" not in exp_cols:
                 self.conn.execute("ALTER TABLE experiments ADD COLUMN measurement_groups TEXT DEFAULT '[]'")
+            if "process_conditions" not in exp_cols:
+                self.conn.execute("ALTER TABLE experiments ADD COLUMN process_conditions TEXT DEFAULT '[]'")
             if "experiment_groups" not in exp_cols:
                 self.conn.execute("ALTER TABLE experiments ADD COLUMN experiment_groups TEXT DEFAULT '[]'")
         except Exception:
@@ -151,7 +154,7 @@ class Database:
     def upsert_experiment(self, rec: dict) -> None:
         fields = [
             "id", "title", "date", "project", "operator", "device", "batch",
-            "category", "status", "tags", "folder", "notes", "params", "measurement_groups", "experiment_groups",
+            "category", "status", "tags", "folder", "notes", "params", "measurement_groups", "process_conditions", "experiment_groups",
             "created_at", "updated_at", "archived",
         ]
         vals = []
@@ -161,7 +164,7 @@ class Database:
                 v = json.dumps(rec.get("groups") or [],ensure_ascii=False)
             if f == "params" and not isinstance(v, str):
                 v = json.dumps(v or {}, ensure_ascii=False)
-            if f == "measurement_groups":
+            if f in ("measurement_groups", "process_conditions"):
                 v = json.dumps(v or [], ensure_ascii=False) if not isinstance(v, str) or not v else v
             if f == "tags" and isinstance(v, (list, tuple)):
                 v = ",".join(str(t).strip() for t in v if str(t).strip())
@@ -207,6 +210,10 @@ class Database:
             rec["measurement_groups"] = json.loads(rec.get("measurement_groups") or "[]")
         except (TypeError, ValueError):
             rec["measurement_groups"] = []
+        try:
+            rec["process_conditions"] = json.loads(rec.get("process_conditions") or "[]")
+        except (TypeError, ValueError):
+            rec["process_conditions"] = []
         try:
             from .groups import normalize_names
             rec["groups"] = normalize_names(json.loads(rec.pop("experiment_groups", "[]") or "[]"), limit=None)

@@ -91,6 +91,7 @@ def render_readme(ctx: Ctx, meta: dict, files: list[dict] | None = None) -> str:
     from .steps import markdown
     from .rich_text import scientific_html, notes_html
     from .measurements import comparison_html
+    from .conditions import summary_html as conditions_summary_html
 
     files = files or []
     p = meta.get("params") or {}
@@ -151,6 +152,10 @@ def render_readme(ctx: Ctx, meta: dict, files: list[dict] | None = None) -> str:
 ## 二、样品与工艺参数
 
 {kv_table(p)}
+
+## 工艺条件矩阵
+
+{conditions_summary_html(meta.get('process_conditions', [])) or '_（尚未记录多组工艺条件）_'}
 
 ## 仪器与对照测量
 
@@ -291,6 +296,7 @@ def create(
     purpose: str = "",
     conditions: str = "",
     measurement_groups: list | None = None,
+    process_conditions: list | None = None,
     groups: list[str] | None = None,
     _creation_log: list | None = None,
 ) -> dict:
@@ -298,9 +304,11 @@ def create(
     require_writer(ctx)
     import uuid
     from .measurements import normalize
+    from .conditions import normalize as normalize_conditions
     from .groups import normalize_names
     groups = normalize_names(groups)
     measurement_groups = normalize(measurement_groups if measurement_groups is not None else [])
+    process_conditions = normalize_conditions(process_conditions if process_conditions is not None else [])
     date_str = date_str or today()
     prefix = ctx.cfg.get("naming", {}).get("id_prefix", "E")
     naming = ctx.cfg.get("naming", {})
@@ -341,6 +349,7 @@ def create(
         "tags": tags or [],
         "params": params or {},
         "measurement_groups": measurement_groups,
+        "process_conditions": process_conditions,
         "groups": groups,
         "notes": notes,
         "purpose": purpose,
@@ -893,8 +902,11 @@ def update(ctx: Ctx, rec: dict, changes: dict) -> dict:
     from .nas import require_writer
     require_writer(ctx)
     from .measurements import normalize
+    from .conditions import normalize as normalize_conditions
     if "measurement_groups" in changes:
         changes = {**changes, "measurement_groups": normalize(changes["measurement_groups"])}
+    if "process_conditions" in changes:
+        changes = {**changes, "process_conditions": normalize_conditions(changes["process_conditions"])}
     folder = exp_dir(ctx, rec)
     meta = load_meta(folder)
     if not meta or meta.get("id") != rec["id"]:
@@ -913,6 +925,9 @@ def update(ctx: Ctx, rec: dict, changes: dict) -> dict:
         if k == "measurement_groups":
             meta[k] = v
             detail.append(f"仪器与测量更新：{len(v)} 台仪器，{sum(len(group['runs']) for group in v)} 组测量")
+        elif k == "process_conditions":
+            meta[k] = v
+            detail.append(f"工艺条件更新：{len(v)} 组条件")
         elif k == "groups":
             meta[k]=v
             detail.append("实验分组="+", ".join(v))
