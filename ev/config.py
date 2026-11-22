@@ -116,6 +116,7 @@ class Ctx:
     con: Console = field(default_factory=Console)
     _db: object = None
     _nas_read_only: bool | None = None
+    _actor: dict | None = None
 
     # ---------------- 路径 ----------------
     @property

@@ -5254,3 +5254,56 @@ sup {
   border: 1px solid var(--line);
   border-radius: var(--radius-control);
 }
+
+/* History Actor Attribution Badges & Filter Bar */
+.history-hint {
+  margin-top: 4px;
+}
+.history-filter-bar {
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.col-actor {
+  white-space: nowrap;
+}
+.actor-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+}
+.actor-badge.actor-human {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.actor-badge.actor-ai {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 35%, var(--line));
+}
+.actor-badge.actor-external {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--line));
+}
+.actor-badge.actor-unknown {
+  background: var(--neutral-bg);
+  color: var(--neutral);
+}
+.activity-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.activity-title-row .actor-badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+}

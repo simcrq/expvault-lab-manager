@@ -39,6 +39,81 @@ STATUS_LABEL = {
     "archived": "已归档",
 }
 
+SOURCE_LABEL = {
+    "web": "网页",
+    "mcp": "MCP",
+    "direct_file": "直写文件",
+    "phone": "手机扫码",
+    "gui": "桌面端",
+    "cli": "命令行",
+}
+
+
+def actor_info(ctx: Ctx | None = None, override: dict | None = None) -> dict:
+    """Resolve canonical actor attribution {actor, actor_type, source}."""
+    if override:
+        actor_type = str(override.get("actor_type") or "human")
+        source = str(override.get("source") or "cli")
+        actor = str(override.get("actor") or "").strip()
+        return {"actor": actor, "actor_type": actor_type, "source": source}
+    if ctx is not None and getattr(ctx, "_actor", None):
+        raw = ctx._actor
+        return {
+            "actor": str(raw.get("actor") or "").strip(),
+            "actor_type": str(raw.get("actor_type") or "human"),
+            "source": str(raw.get("source") or "cli"),
+        }
+    env_type = os.environ.get("EXPVAULT_ACTOR_TYPE", "").strip().lower()
+    env_source = os.environ.get("EXPVAULT_SOURCE", "").strip().lower()
+    env_actor = os.environ.get("EXPVAULT_ACTOR", "").strip()
+    operator = (ctx.cfg.get("operator", "") if ctx is not None else "") or ""
+    if env_type in ("human", "ai", "external") or env_source:
+        return {
+            "actor": env_actor or ("AI" if env_type == "ai" else operator or "人工"),
+            "actor_type": env_type if env_type in ("human", "ai", "external") else "human",
+            "source": env_source or ("mcp" if env_type == "ai" else "cli"),
+        }
+    return {"actor": operator or "人工", "actor_type": "human", "source": "cli"}
+
+
+def actor_label(entry: dict) -> str:
+    """Human-readable actor attribution label for README / CLI."""
+    actor_type = entry.get("actor_type") or ""
+    source = entry.get("source") or ""
+    actor = (entry.get("actor") or "").strip()
+    if not actor_type and not source and not actor:
+        return "未记录来源"
+    if actor_type == "ai" or source == "mcp":
+        clean = actor[4:-1].strip() if actor.startswith("AI (") and actor.endswith(")") else actor
+        return f"AI · MCP（{clean}）" if clean and clean not in ("AI", "AI (MCP)", "MCP") else "AI · MCP"
+    if actor_type == "external" or source == "direct_file":
+        return "直写文件（外部/AI）"
+    src_name = SOURCE_LABEL.get(source, source or "人工")
+    if actor and actor not in ("人工", src_name):
+        return f"人工 · {src_name}（{actor}）"
+    return f"人工 · {src_name}"
+
+
+def record_history(ctx: Ctx | None, meta: dict, action: str, detail: str, *,
+                   ts: str | None = None, actor: dict | None = None) -> dict:
+    info = actor_info(ctx, actor)
+    entry = {
+        "ts": ts or now_iso(),
+        "action": action,
+        "detail": detail,
+        "actor": info["actor"],
+        "actor_type": info["actor_type"],
+        "source": info["source"],
+    }
+    meta.setdefault("history", []).append(entry)
+    return entry
+
+
+def log_event(ctx: Ctx, action: str, exp_id: str = "", detail: str = "", *,
+              actor: dict | None = None) -> None:
+    info = actor_info(ctx, actor)
+    ctx.db.log(action, exp_id, detail, actor=info["actor"], actor_type=info["actor_type"], source=info["source"])
+
 
 # --------------------------------------------------------------------------
 # 路径与元数据
@@ -187,7 +262,7 @@ def render_readme(ctx: Ctx, meta: dict, files: list[dict] | None = None) -> str:
 
 ## 七、变更记录
 
-{chr(10).join(f"- {human_time(e['ts'])}  {scientific_html(e['action'])}  {scientific_html(e['detail'])}" for e in reversed(meta.get('history', [])[-20:])) or '_（暂无）_'}
+{chr(10).join(f"- {human_time(e['ts'])}  [{scientific_html(actor_label(e))}]  {scientific_html(e['action'])}  {scientific_html(e['detail'])}" for e in reversed(meta.get('history', [])[-20:])) or '_（暂无）_'}
 
 {MANUAL_BEGIN}
 
@@ -358,15 +433,16 @@ def create(
         "conclusion": "",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "history": [{"ts": now_iso(), "action": "create", "detail": title}],
+        "history": [],
     }
+    record_history(ctx, meta, "create", title)
     save_meta(folder, meta)
 
     rec = dict(meta)
     rec["folder"] = posix(os.path.relpath(folder, ctx.root))
     ctx.db.upsert_experiment(rec)
-    ctx.db.log("create", exp_id, f"{title}")
-    append_jsonl(ctx.log_path, {"ts": now_iso(), "action": "create", "exp_id": exp_id, "detail": title})
+    log_event(ctx, "create", exp_id, f"{title}")
+    append_jsonl(ctx.log_path, {"ts": now_iso(), "action": "create", "exp_id": exp_id, "detail": title, **actor_info(ctx)})
 
     rec = ctx.db.get_experiment(exp_id)
     write_readme(ctx, meta, [], folder=folder)
@@ -387,8 +463,10 @@ def register_from_disk(ctx: Ctx, folder: Path) -> dict | None:
     return meta
 
 
-def scan_files(ctx: Ctx, folder: Path, meta: dict, *, rehash: bool = False) -> dict:
-    """登记目录内文件；mtime+size 未变时复用已有哈希，避免重复读大文件。"""
+def scan_files(ctx: Ctx, folder: Path, meta: dict, *, rehash: bool = False, detect_external: bool = False) -> dict:
+    """登记目录内文件；mtime+size 未变时复用已有哈希，避免重复读大文件。
+    detect_external=True 时，若发现未经网页/MCP/GUI 登记的新增或外部修改文件，自动写入直写文件变更记录。
+    """
     exp_id = meta.get("id", "")
     if not exp_id:
         raise ValueError(f"实验目录缺少有效的 meta.json，无法登记：{folder}")
@@ -396,7 +474,7 @@ def scan_files(ctx: Ctx, folder: Path, meta: dict, *, rehash: bool = False) -> d
     known = {f["relpath"]: f for f in ctx.db.files_of(exp_id)}
     file_tags = meta.get("file_tags", {})
     seen: list[str] = []
-    stats = {"new": 0, "changed": 0, "same": 0, "bytes": 0, "hashed_bytes": 0}
+    stats = {"new": 0, "changed": 0, "same": 0, "bytes": 0, "hashed_bytes": 0, "external_new": [], "external_changed": []}
 
     for dirpath, dirnames, filenames in os.walk(folder):
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
@@ -434,8 +512,12 @@ def scan_files(ctx: Ctx, folder: Path, meta: dict, *, rehash: bool = False) -> d
             stats["hashed_bytes"] += size
             if old is None:
                 stats["new"] += 1
+                if rel not in (META_NAME, README_NAME):
+                    stats["external_new"].append(rel)
             elif old["sha256"] != digest:
                 stats["changed"] += 1
+                if rel != README_NAME:
+                    stats["external_changed"].append(rel)
             ctx.db.upsert_file(exp_id, {"relpath": rel, "size": size, "mtime": mtime,
                                         "sha256": digest, "role": ctx.role_for(rel),
                                         "is_link": is_link, "tags": file_tags.get(rel, [])})
@@ -443,6 +525,30 @@ def scan_files(ctx: Ctx, folder: Path, meta: dict, *, rehash: bool = False) -> d
     ctx.db.commit()
     stats["missing"] = missing
     stats["count"] = len(seen)
+
+    if detect_external and (stats["external_new"] or stats["external_changed"]):
+        parts = []
+        if stats["external_new"]:
+            sample = ", ".join(stats["external_new"][:5])
+            more = f" 等 {len(stats['external_new'])} 个" if len(stats["external_new"]) > 5 else ""
+            parts.append(f"新增 {len(stats['external_new'])} 个（{sample}{more}）")
+        if stats["external_changed"]:
+            sample = ", ".join(stats["external_changed"][:5])
+            more = f" 等 {len(stats['external_changed'])} 个" if len(stats["external_changed"]) > 5 else ""
+            parts.append(f"修改 {len(stats['external_changed'])} 个（{sample}{more}）")
+        detail = "检测到直接写入磁盘：" + "；".join(parts)
+        ext_actor = {"actor": "外部 / AI 直写", "actor_type": "external", "source": "direct_file"}
+        latest_meta = load_meta(folder) or meta
+        record_history(ctx, latest_meta, "direct_write", detail, actor=ext_actor)
+        latest_meta["updated_at"] = now_iso()
+        save_meta(folder, latest_meta)
+        mp = folder / META_NAME
+        mst = mp.stat()
+        ctx.db.upsert_file(exp_id, {"relpath": META_NAME, "size": int(mst.st_size), "mtime": float(mst.st_mtime),
+                                    "sha256": sha256_file(mp), "role": "meta"})
+        ctx.db.upsert_experiment({**latest_meta, "folder": rel_posix(folder, ctx.root)})
+        log_event(ctx, "direct_write", exp_id, detail, actor=ext_actor)
+        ctx.db.commit()
     return stats
 
 
@@ -460,8 +566,9 @@ def sync(ctx: Ctx, *, rehash: bool = False, adopt: bool = False) -> dict:
         meta = load_meta(folder) or {}
         if not existed:
             total["adopted"] += 1
-            ctx.db.log("adopt", meta.get("id", ""), "从磁盘 meta.json 登记")
-        st = scan_files(ctx, folder, meta, rehash=rehash)
+            ext_actor = {"actor": "外部 / AI 直写", "actor_type": "external", "source": "direct_file"}
+            log_event(ctx, "adopt", meta.get("id", ""), "从磁盘 meta.json 直接发现并登记", actor=ext_actor)
+        st = scan_files(ctx, folder, meta, rehash=rehash, detect_external=bool(existed))
         total["experiments"] += 1
         total["new_files"] += st["new"]
         total["changed"] += st["changed"]
@@ -691,11 +798,11 @@ def add_files(ctx: Ctx, rec: dict, paths: list[Path], role: str = "", move: bool
     if link:
         ls = results["link_stats"]
         note += f"（链接：硬 {ls.get('hard', 0)} / 软 {ls.get('soft', 0)}）"
-    meta.setdefault("history", []).append({"ts": now_iso(), "action": "add", "detail": note})
+    record_history(ctx, meta, "add", note)
     meta["updated_at"] = now_iso()
     save_meta(folder, meta)
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
-    ctx.db.log("add", rec["id"], note)
+    log_event(ctx, "add", rec["id"], note)
     scan_files(ctx, folder, meta)
     write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False), folder=folder)
     return results
@@ -809,13 +916,11 @@ def remove_files(ctx: Ctx, rec: dict, patterns: list[str], *, delete_disk: bool 
         detail = ", ".join(out["removed"][:6])
         if len(out["removed"]) > 6:
             detail += f" 等 {len(out['removed'])} 项"
-        meta.setdefault("history", []).append(
-            {"ts": now_iso(), "action": "rm", "detail": detail}
-        )
+        record_history(ctx, meta, "rm", detail)
         meta["updated_at"] = now_iso()
         save_meta(folder, meta)
         ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
-        ctx.db.log("rm", rec["id"], detail)
+        log_event(ctx, "rm", rec["id"], detail)
         write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False), folder=folder)
     return out
 
@@ -945,16 +1050,14 @@ def update(ctx: Ctx, rec: dict, changes: dict) -> dict:
         if k in ("tags",):
             detail.append(f"tags={','.join(v)}")
     meta["updated_at"] = now_iso()
-    meta.setdefault("history", []).append(
-        {"ts": now_iso(), "action": "edit", "detail": "; ".join(detail)}
-    )
+    record_history(ctx, meta, "edit", "; ".join(detail))
     save_meta(folder, meta)
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
     path = folder / META_NAME
     st = path.stat()
     ctx.db.upsert_file(rec["id"], {"relpath": META_NAME, "size": st.st_size, "mtime": st.st_mtime,
                                    "sha256": sha256_file(path), "role": "meta"})
-    ctx.db.log("edit", rec["id"], "; ".join(detail))
+    log_event(ctx, "edit", rec["id"], "; ".join(detail))
     write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False))
     return ctx.db.get_experiment(rec["id"]) or {}
 
@@ -981,12 +1084,12 @@ def append_note(ctx: Ctx, rec: dict, text: str, author: str = "", *, references=
 
     meta = load_meta(folder) or {}
     meta.setdefault("journal_entries", []).append(record)
-    meta.setdefault("history", []).append({"ts": stamp, "action": "note", "detail": truncate(text, 60)})
+    record_history(ctx, meta, "note", truncate(text, 60), ts=stamp)
     meta["updated_at"] = stamp
     save_meta(folder, meta)
     scan_files(ctx, folder, meta)
     write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False), folder=folder)
-    ctx.db.log("note", rec["id"], truncate(text, 80))
+    log_event(ctx, "note", rec["id"], truncate(text, 80))
     return path
 
 
@@ -998,11 +1101,11 @@ def archive(ctx: Ctx, rec: dict, flag: bool = True) -> None:
     meta["archived"] = 1 if flag else 0
     meta["status"] = "archived" if flag else "done"
     meta["updated_at"] = now_iso()
-    meta.setdefault("history", []).append({"ts": meta["updated_at"], "action": "archive" if flag else "unarchive",
-                                           "detail": "归档实验，保留全部记录与文件" if flag else "恢复实验为已完成状态"})
+    record_history(ctx, meta, "archive" if flag else "unarchive",
+                   "归档实验，保留全部记录与文件" if flag else "恢复实验为已完成状态", ts=meta["updated_at"])
     save_meta(folder, meta)
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
-    ctx.db.log("archive" if flag else "unarchive", rec["id"], "")
+    log_event(ctx, "archive" if flag else "unarchive", rec["id"], "")
 
 
 def rebuild_index(ctx: Ctx) -> dict:
@@ -1048,9 +1151,7 @@ def adopt(ctx: Ctx, src: Path, *, move: bool = False, title: str = "", **fields)
             (shutil.move if move else shutil.copy2)(str(item), str(dest))
     meta = load_meta(folder) or {}
     scan_files(ctx, folder, meta)
-    meta.setdefault("history", []).append(
-        {"ts": now_iso(), "action": "adopt", "detail": f"从 {src} 导入"}
-    )
+    record_history(ctx, meta, "adopt", f"从 {src} 导入")
     save_meta(folder, meta)
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
     write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False))

@@ -65,11 +65,14 @@ CREATE INDEX IF NOT EXISTS idx_files_hash ON files(sha256);
 CREATE INDEX IF NOT EXISTS idx_exp_date   ON experiments(date);
 
 CREATE TABLE IF NOT EXISTS events (
-    id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts     TEXT,
-    exp_id TEXT,
-    action TEXT,
-    detail TEXT
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts         TEXT,
+    exp_id     TEXT,
+    action     TEXT,
+    detail     TEXT,
+    actor      TEXT DEFAULT '',
+    actor_type TEXT DEFAULT '',
+    source     TEXT DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS backups (
@@ -116,6 +119,13 @@ class Database:
                 self.conn.execute("ALTER TABLE experiments ADD COLUMN process_conditions TEXT DEFAULT '[]'")
             if "experiment_groups" not in exp_cols:
                 self.conn.execute("ALTER TABLE experiments ADD COLUMN experiment_groups TEXT DEFAULT '[]'")
+            ev_cols = {r[1] for r in self.conn.execute("PRAGMA table_info(events)").fetchall()}
+            if "actor" not in ev_cols:
+                self.conn.execute("ALTER TABLE events ADD COLUMN actor TEXT DEFAULT ''")
+            if "actor_type" not in ev_cols:
+                self.conn.execute("ALTER TABLE events ADD COLUMN actor_type TEXT DEFAULT ''")
+            if "source" not in ev_cols:
+                self.conn.execute("ALTER TABLE events ADD COLUMN source TEXT DEFAULT ''")
         except Exception:
             pass
 
@@ -406,10 +416,11 @@ class Database:
     # ------------------------------------------------------------------
     # 事件
     # ------------------------------------------------------------------
-    def log(self, action: str, exp_id: str = "", detail: str = "") -> None:
+    def log(self, action: str, exp_id: str = "", detail: str = "", *,
+            actor: str = "", actor_type: str = "", source: str = "") -> None:
         self.conn.execute(
-            "INSERT INTO events (ts, exp_id, action, detail) VALUES (?,?,?,?)",
-            (now_iso(), exp_id or "", action, detail or ""),
+            "INSERT INTO events (ts, exp_id, action, detail, actor, actor_type, source) VALUES (?,?,?,?,?,?,?)",
+            (now_iso(), exp_id or "", action, detail or "", actor or "", actor_type or "", source or ""),
         )
         self.commit()
 

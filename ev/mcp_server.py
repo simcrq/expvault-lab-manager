@@ -36,7 +36,7 @@ from .ui import Console
 from .util import sha256_file
 
 SUPPORTED_PROTOCOLS = ("2025-03-26", "2024-11-05")
-SERVER_INFO = {"name": "expvault-mcp", "version": "1.9.6"}
+SERVER_INFO = {"name": "expvault-mcp", "version": "1.9.7"}
 
 
 def _inside(path: Path, parent: Path) -> bool:
@@ -341,8 +341,9 @@ def client_config(root: Path | str, *, http_url: str = "") -> dict:
 class MCPServer:
     """Stateful-per-vault MCP JSON-RPC 2.0 handler."""
 
-    def __init__(self, root: Path | str, *, nas_mode: str | None = None):
+    def __init__(self, root: Path | str, *, nas_mode: str | None = None, client_name: str = ""):
         self.root = Path(root).expanduser().resolve()
+        self.client_name = (client_name or "").strip()[:64]
         if nas.is_nas(self.root):
             self.nas_mode = nas_mode or ("writer" if nas.writer(self.root) else "viewer")
         else:
@@ -353,6 +354,11 @@ class MCPServer:
         ctx = config.load(self.root)
         if self.nas_mode:
             ctx._nas_read_only = self.nas_mode == "viewer"
+        ctx._actor = {
+            "actor": f"AI ({self.client_name})" if self.client_name else "AI",
+            "actor_type": "ai",
+            "source": "mcp",
+        }
         ctx.con = Console(quiet=True, color=False)
         try:
             yield ctx
@@ -655,7 +661,10 @@ class MCPServer:
                     ft = meta.setdefault("file_tags", {})
                     for rel in args["paths"]:
                         ft[rel] = normalize_tags([*(ft.get(rel, []) if merge else []), *new_tags])
+                    detail = f"更新 {len(args['paths'])} 个文件标签" + (f"：{', '.join(new_tags[:5])}" if new_tags else "（清空）")
+                    ex.record_history(ctx, meta, "file_tags", detail)
                     ex.save_meta(folder, meta)
+                    ex.log_event(ctx, "file_tags", rec["id"], detail)
                     self._refresh(ctx, rec)
                     return {"updated": len(args["paths"]), "revision": sha256_file(folder / ex.META_NAME)}
 
@@ -738,6 +747,10 @@ class MCPServer:
 
         try:
             if method == "initialize":
+                if isinstance(params, dict):
+                    cinfo = params.get("clientInfo")
+                    if isinstance(cinfo, dict) and cinfo.get("name"):
+                        self.client_name = str(cinfo["name"]).strip()[:64]
                 requested = params.get("protocolVersion") if isinstance(params, dict) else None
                 version = requested if requested in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
                 return ok({

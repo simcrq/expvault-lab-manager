@@ -209,7 +209,7 @@ def _store_upload_for_condition(ctx, folder: Path, exp_id: str, cond_id: str, co
 def _commit_meta(ctx, rec: dict, folder: Path, meta: dict, action: str, detail: str) -> None:
     stamp = now_iso()
     meta["updated_at"] = stamp
-    meta.setdefault("history", []).append({"ts": stamp, "action": action, "detail": detail})
+    ex.record_history(ctx, meta, action, detail, ts=stamp)
     ex.save_meta(folder, meta)
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
     meta_file = folder / ex.META_NAME
@@ -221,7 +221,7 @@ def _commit_meta(ctx, rec: dict, folder: Path, meta: dict, action: str, detail: 
         "sha256": sha256_file(meta_file),
         "role": "meta",
     })
-    ctx.db.log(action, rec["id"], detail)
+    ex.log_event(ctx, action, rec["id"], detail)
     ctx.db.commit()
 
 

@@ -147,7 +147,7 @@ def record(ctx: Ctx, rec: dict, *, text: str | None = None, title: str | None = 
             action = "step_edit" if old else "step_add"
             detail = f"#{number} {truncate(step['title'], 60)}"
             meta["updated_at"] = stamp
-            meta.setdefault("history", []).append({"ts": stamp, "action": action, "detail": detail})
+            ex.record_history(ctx, meta, action, detail, ts=stamp)
             ex.save_meta(folder, meta)
             committed = True
         finally:
@@ -163,7 +163,7 @@ def record(ctx: Ctx, rec: dict, *, text: str | None = None, title: str | None = 
         ex.scan_files(ctx, folder, meta)
         _register_written(ctx, rec, written)
         ex.write_readme(ctx, meta, ctx.db.files_of(rec["id"], include_missing=False), folder=folder)
-        ctx.db.log(action, rec["id"], detail)
+        ex.log_event(ctx, action, rec["id"], detail)
         return step
 
 

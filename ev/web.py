@@ -427,7 +427,8 @@ class WebServer:
                     if not self.local_controls():
                         raise WebError("MCP 接口仅允许本机访问", status=403)
                     from .mcp_server import MCPServer
-                    reply = MCPServer(owner.service.root, nas_mode=owner.service.nas_mode).handle_message(value)
+                    client_name = self.headers.get("X-MCP-Client", "").strip()[:64]
+                    reply = MCPServer(owner.service.root, nas_mode=owner.service.nas_mode, client_name=client_name).handle_message(value)
                     if reply is None:
                         self.send_response(204)
                         self.headers_common()

@@ -177,6 +177,7 @@ class WebService:
             ctx = config.load(self.root)
             if self.nas_mode:
                 ctx._nas_read_only = self.nas_mode == "viewer"
+            ctx._actor = {"actor": ctx.cfg.get("operator") or "人工", "actor_type": "human", "source": "web"}
             ctx.con = Console(quiet=True, color=False)
             try:
                 for path in (self.root / config.CONFIG_NAME, ctx.data_dir, ctx.db_path, ctx.report_dir, ctx.log_path, ctx.meta_dir):
@@ -560,7 +561,7 @@ class WebService:
                            result=result, message=f"导入 {len(result['imported'])} 个，重复 {len(result['duplicates'])} 个，失败 {len(result['errors'])} 个")
             elif op == "files.tags":
                 set_file_tags(self.root, arguments["exp_id"], arguments["paths"], arguments["tags"], merge=arguments.get("merge", False),
-                              expected_revision=arguments.get("expected_revision"))
+                              expected_revision=arguments.get("expected_revision"), source="web")
                 job.update(status="succeeded", result={"updated": len(arguments["paths"])}, message="文件标签已保存")
             else:
                 with self.context() as ctx, FileLock(str(ctx.meta_dir / "harness.lock"), timeout=0):
@@ -780,9 +781,10 @@ class WebService:
             write_json(self.exports / f"{export_id}.json", {"path": output.relative_to(ctx.report_dir).as_posix(), "name": output.name})
             return {"id": export_id, "name": output.name, "format": res["format"], "count": res["count"],
                     "url": f"/api/report?id={export_id}", "markdown": res["markdown"]}
-        elif operation == "experiments.scan" and self.nas_mode:
-            ex.scan_files(ctx, ex.exp_dir(ctx, rec), ex.load_meta(ex.exp_dir(ctx, rec)))
-        elif operation != "experiments.scan":
+        elif operation == "experiments.scan":
+            folder = ex.exp_dir(ctx, rec)
+            ex.scan_files(ctx, folder, ex.load_meta(folder), detect_external=True)
+        else:
             raise WebError("不支持的操作")
         self.refresh(ctx, rec)
         return self.experiment(ctx, rec["id"])

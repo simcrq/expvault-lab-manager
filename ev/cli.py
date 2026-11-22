@@ -1213,7 +1213,7 @@ def cmd_scan(args, con: Console) -> int:
     rec = session.require_current(ctx)
     folder = ex.exp_dir(ctx, rec)
     meta = ex.load_meta(folder) or {}
-    st = ex.scan_files(ctx, folder, meta, rehash=args.rehash)
+    st = ex.scan_files(ctx, folder, meta, rehash=args.rehash, detect_external=True)
     con.ok(f"扫描 {rec['id']}：新增 {st['new']}，变更 {st['changed']}，"
            f"丢失 {st['missing']}，共 {st['count']} 个文件")
     if st["new"] == 0 and st["changed"] == 0 and st["missing"] == 0:

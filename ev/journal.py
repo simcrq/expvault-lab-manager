@@ -59,7 +59,7 @@ def update_references(ctx, rec, note_id, files):
     temporary.replace(path)
     entries[entries.index(old)] = updated
     meta["updated_at"] = updated["updated_at"]
-    meta.setdefault("history", []).append({"ts":meta["updated_at"], "action":"note_references", "detail":f"调整日志 {note_id} 的资料引用"})
+    ex.record_history(ctx, meta, "note_references", f"调整日志 {note_id} 的资料引用", ts=meta["updated_at"])
     ex.save_meta(folder, meta)
-    ctx.db.log("note_references", rec["id"], f"调整日志 {note_id} 的资料引用")
+    ex.log_event(ctx, "note_references", rec["id"], f"调整日志 {note_id} 的资料引用")
     return updated

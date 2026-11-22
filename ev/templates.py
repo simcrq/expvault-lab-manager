@@ -56,7 +56,7 @@ def create_many(ctx, source, plans, *, progress=None, source_revision=""):
             folder = ex.exp_dir(ctx,rec)
             meta = ex.load_meta(folder)
             meta["template_source"] = {"id":source["id"],"sync_id":source.get("sync_id", ""),"title":source["title"],"revision":source_revision,"batch_id":batch_id}
-            meta["history"].append({"ts":now_iso(),"action":"from_template","detail":"根据实验模板创建："+source["id"]+" · "+source["title"]})
+            ex.record_history(ctx, meta, "from_template", "根据实验模板创建："+source["id"]+" · "+source["title"])
             ex.save_meta(folder,meta)
             ex.write_readme(ctx,meta,[],folder=folder)
             ex.scan_files(ctx,folder,meta)

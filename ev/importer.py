@@ -173,7 +173,16 @@ def _reserve_name(destination):
             continue
 
 
-def _save_file_metadata(ctx, rec, folder, relative, digest, tags, *, imported=False):
+def _import_actor(ctx, origin: str = "") -> dict:
+    operator = (ctx.cfg.get("operator") or "").strip() or "人工"
+    if "手机" in (origin or ""):
+        return {"actor": operator, "actor_type": "human", "source": "phone"}
+    if "网页" in (origin or ""):
+        return {"actor": operator, "actor_type": "human", "source": "web"}
+    return {"actor": operator, "actor_type": "human", "source": "gui"}
+
+
+def _save_file_metadata(ctx, rec, folder, relative, digest, tags, *, imported=False, actor=None):
     # 每个文件提交一次权威元数据，取消/后续文件失败不丢此前成功的标签。
     meta = ex.load_meta(folder)
     if not meta or meta.get("id") != rec["id"]:
@@ -181,7 +190,7 @@ def _save_file_metadata(ctx, rec, folder, relative, digest, tags, *, imported=Fa
     meta.setdefault("file_tags", {})[relative] = normalize_tags(tags)
     meta["updated_at"] = now_iso()
     if imported:
-        meta.setdefault("history", []).append({"ts": now_iso(), "action": "gui_import", "detail": relative})
+        ex.record_history(ctx, meta, "gui_import", relative, actor=actor)
     ex.save_meta(folder, meta)
     stat = (folder / relative).stat()
     ctx.db.upsert_experiment({**meta, "folder": rec["folder"]})
@@ -280,7 +289,7 @@ def import_items(root, exp_id, items: list[ImportItem], *, role="auto", deduplic
                     # 此后失败保留已验证的副本，不删除已经落盘的实验数据。
                     item.destination = relative
                     reserved = None
-                    _save_file_metadata(ctx, rec, folder, relative, digest, item.tags, imported=True)
+                    _save_file_metadata(ctx, rec, folder, relative, digest, item.tags, imported=True, actor=_import_actor(ctx, item.origin))
                     known.setdefault((copied, digest), []).append(relative)
                     item.status = "已导入"
                     results["imported"].append(item.key)
@@ -309,7 +318,8 @@ def import_items(root, exp_id, items: list[ImportItem], *, role="auto", deduplic
         if results["imported"] or results["duplicates"]:
             meta = ex.load_meta(folder)
             ex.write_readme(ctx, meta, ctx.db.files_of(exp_id, include_missing=False), folder=folder)
-            ctx.db.log("gui_import", exp_id, f"导入 {len(results['imported'])}，重复 {len(results['duplicates'])}，失败 {len(results['errors'])}")
+            first_origin = items[0].origin if items else ""
+            ex.log_event(ctx, "gui_import", exp_id, f"导入 {len(results['imported'])}，重复 {len(results['duplicates'])}，失败 {len(results['errors'])}", actor=_import_actor(ctx, first_origin))
         return results
     finally:
         if ctx._db is not None:
@@ -318,10 +328,11 @@ def import_items(root, exp_id, items: list[ImportItem], *, role="auto", deduplic
             lock.release()
 
 
-def set_file_tags(root, exp_id, relative_paths, tags, *, merge=False, expected_revision=None):
-    """GUI 中对已导入文件追加/修改标签；重建索引仍可恢复。"""
+def set_file_tags(root, exp_id, relative_paths, tags, *, merge=False, expected_revision=None, source="gui"):
+    """GUI / 网页中对已导入文件追加/修改标签；重建索引仍可恢复。"""
     tags = normalize_tags(tags)
     ctx = config.load(Path(root))
+    ctx._actor = {"actor": ctx.cfg.get("operator") or "人工", "actor_type": "human", "source": source}
     from .nas import require_writer
     require_writer(ctx)
     try:
@@ -345,7 +356,16 @@ def set_file_tags(root, exp_id, relative_paths, tags, *, merge=False, expected_r
             for relative, f in targets:
                 labels = normalize_tags(meta.get("file_tags", {}).get(relative, []) + tags) if merge else tags
                 _save_file_metadata(ctx, rec, folder, relative, f["sha256"], labels)
-            ex.write_readme(ctx, ex.load_meta(folder), ctx.db.files_of(exp_id, include_missing=False), folder=folder)
+            latest_meta = ex.load_meta(folder)
+            detail = f"更新 {len(targets)} 个文件标签" + (f"：{', '.join(tags[:5])}" if tags else "（清空）")
+            ex.record_history(ctx, latest_meta, "file_tags", detail)
+            ex.save_meta(folder, latest_meta)
+            mp = folder / ex.META_NAME
+            mst = mp.stat()
+            ctx.db.upsert_file(rec["id"], {"relpath": ex.META_NAME, "size": int(mst.st_size), "mtime": float(mst.st_mtime),
+                                           "sha256": sha256_file(mp), "role": "meta"})
+            ex.log_event(ctx, "file_tags", exp_id, detail)
+            ex.write_readme(ctx, latest_meta, ctx.db.files_of(exp_id, include_missing=False), folder=folder)
     finally:
         if ctx._db is not None:
             ctx.db.close()

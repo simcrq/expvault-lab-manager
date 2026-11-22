@@ -234,6 +234,8 @@ const eventNames = {
   condition_status: "条件状态变更",
   condition_reorder: "条件顺序调整",
   condition_delete: "删除工艺条件",
+  direct_write: "直写文件检测",
+  file_tags: "修改文件标签",
 };
 const conditionStatusInfo = {
   best: { label: "最优", short: "★ 最优", cls: "best" },
@@ -290,6 +292,7 @@ const state = {
   condCompare: new Set(),
   condActiveImage: new Map(),
   condPasteTarget: "",
+  historyActorFilter: "",
 };
 let token =
   location.hash.slice(1) || sessionStorage.getItem("expvault.web.token") || "";
@@ -425,6 +428,7 @@ function navigate(view, expId = "", tab = "conditions", replace = false) {
     state.condCompare.clear();
     state.condActiveImage.clear();
     state.condPasteTarget = "";
+    state.historyActorFilter = "";
   }
   state.view = view;
   state.expId = expId;
@@ -860,13 +864,47 @@ function experimentRows(records, selectable = false) {
 function experimentTable(records, selectable = false) {
   return `<div class="table-wrap"><table class="experiment-table"><caption class="sr-only">实验项目与关键参数</caption><thead><tr>${selectable ? '<th scope="col" class="col-select"><input type="checkbox" id="select-all-experiments" aria-label="选择本页实验"></th>' : ""}<th scope="col" class="col-experiment">实验 / 样品</th><th scope="col" class="col-status">状态</th><th scope="col" class="col-parameters">关键参数</th><th scope="col" class="col-updated">最近更新</th><th scope="col" class="col-files">实验资料</th><th scope="col" class="col-open"><span class="sr-only">打开实验</span></th></tr></thead><tbody>${experimentRows(records, selectable)}</tbody></table></div>`;
 }
+const sourceLabels = {
+  web: "网页",
+  mcp: "MCP",
+  direct_file: "直写文件",
+  phone: "手机扫码",
+  gui: "桌面端",
+  cli: "命令行",
+};
+function actorCategory(item) {
+  const t = item?.actor_type || "";
+  const s = item?.source || "";
+  if (t === "ai" || s === "mcp") return "ai";
+  if (t === "external" || s === "direct_file") return "external";
+  if (t === "human" || s) return "human";
+  return "unknown";
+}
+function actorBadgeHTML(item) {
+  const cat = actorCategory(item);
+  const src = item?.source || "";
+  const actor = (item?.actor || "").trim();
+  if (cat === "ai") {
+    const label = actor && actor !== "AI" && actor !== "AI (MCP)" ? `AI · MCP (${actor.replace(/^AI\s*\((.*)\)$/, "$1")})` : "AI · MCP";
+    return `<span class="actor-badge actor-ai" title="由 AI 通过 MCP 接口操作">${e(label)}</span>`;
+  }
+  if (cat === "external") {
+    return `<span class="actor-badge actor-external" title="直接写入或修改磁盘文件（外部程序或 AI 直写）">直写文件 · 外部/AI</span>`;
+  }
+  if (cat === "human") {
+    const srcName = sourceLabels[src] || src || "网页";
+    const extra = actor && actor !== "人工" && actor !== srcName ? ` · ${actor}` : "";
+    return `<span class="actor-badge actor-human" title="由人工通过${e(srcName)}操作">人工 · ${e(srcName)}${e(extra)}</span>`;
+  }
+  return `<span class="actor-badge actor-unknown">历史记录</span>`;
+}
 function activities(items) {
   return `<div class="activity-list">${
     items
       .slice(0, 5)
       .map(
         (item) =>
-          `<div class="activity-item"><span class="activity-symbol">${icon(item.action === "create" ? "plus" : item.action === "backup" ? "shield" : "note")}</span><div class="activity-detail"><strong>${e(eventNames[item.action] || item.action)}</strong><p>${e(item.detail || item.exp_id || "实验库记录")}</p><time>${e(date(item.ts, true))}</time></div></div>`,
+          `<div class="activity-item"><span class="activity-symbol">${icon(item.action === "create" ? "plus" : item.action === "backup" ? "shield" : "note")}</span><div class="activity-detail"><div class="activity-title-row"><strong>${e(eventNames[item.action] || item.action)}</strong>${item.actor_type || item.source ? actorBadgeHTML(item) : ""}</div><p>${e(item.detail || item.exp_id || "实验库记录")}</p><time>${e(date(item.ts, true))}</time></div></div>`,
       )
       .join("") || '<p class="muted">还没有活动记录</p>'
   }</div>`;
@@ -1426,18 +1464,39 @@ async function detailPage() {
   if (state.tab === "conditions") return tabPanel(conditionsSection(meta));
   if (state.tab === "files") return tabPanel(await filesSection());
   if (state.tab === "steps") return tabPanel(stepsSection(meta));
-  if (state.tab === "history")
+  if (state.tab === "history") {
+    const allHistory = [...(meta.history || [])].reverse();
+    const hCounts = {
+      all: allHistory.length,
+      human: allHistory.filter((i) => actorCategory(i) === "human").length,
+      ai: allHistory.filter((i) => actorCategory(i) === "ai").length,
+      external: allHistory.filter((i) => actorCategory(i) === "external").length,
+    };
+    const shownHistory = state.historyActorFilter
+      ? allHistory.filter((i) => actorCategory(i) === state.historyActorFilter)
+      : allHistory;
+    const hFilters = [
+      ["", "全部", hCounts.all],
+      ["human", "人工（网页 / 桌面）", hCounts.human],
+      ["ai", "AI（MCP 接口）", hCounts.ai],
+      ["external", "直写文件（外部/AI）", hCounts.external],
+    ]
+      .map(
+        ([k, label, cnt]) =>
+          `<button type="button" class="cond-filter-pill ${state.historyActorFilter === k ? "active" : ""}" data-action="history-filter-actor" data-actor="${k}">${label} <span>${cnt}</span></button>`,
+      )
+      .join("");
     return tabPanel(
-      `<section class="panel"><header class="panel-header"><h2>实验变更记录</h2><span class="muted">最近 100 条</span></header><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>内容</th></tr></thead><tbody>${
-        [...(meta.history || [])]
-          .reverse()
+      `<section class="panel"><header class="panel-header"><div><h2>实验变更记录</h2><p class="field-hint history-hint">清晰追溯每条记录是由人工网页操作、AI 通过 MCP 接口写入，还是直接写入磁盘文件。</p></div><span class="muted">最近 100 条</span></header><div class="history-filter-bar"><div class="cond-filter-pills" role="group" aria-label="按操作方筛选变更记录">${hFilters}</div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>操作方 / 来源</th><th>操作</th><th>内容</th></tr></thead><tbody>${
+        shownHistory
           .map(
             (item) =>
-              `<tr><td>${e(date(item.ts, true))}</td><td>${e(eventNames[item.action] || item.action)}</td><td class="file-name">${e(item.detail)}</td></tr>`,
+              `<tr><td class="col-updated">${e(date(item.ts, true))}</td><td class="col-actor">${actorBadgeHTML(item)}</td><td>${e(eventNames[item.action] || item.action)}</td><td class="file-name">${e(item.detail)}</td></tr>`,
           )
-          .join("") || '<tr><td colspan="3">还没有变更记录</td></tr>'
+          .join("") || '<tr><td colspan="4">没有匹配的变更记录</td></tr>'
       }</tbody></table></div></section>`,
     );
+  }
   const prose = (title, key, name) =>
     `<section class="panel"><div class="panel-body spaced"><h3 class="section-title">${icon(name)}${title}</h3><p class="prose ${meta[key] ? "" : "empty"}">${scientificHTML(meta[key] || "暂未填写，点击「编辑实验」补充。")}</p></div></section>`;
   const latest = (meta.steps || []).at(-1);
@@ -5409,6 +5468,9 @@ document.addEventListener("click", async (event) => {
     } else if (action === "condition-filter-status") {
       state.condStatusFilter = control.dataset.status || "";
       refreshConditionsView();
+    } else if (action === "history-filter-actor") {
+      state.historyActorFilter = control.dataset.actor || "";
+      await renderPage();
     } else if (action === "condition-reset-filters") {
       state.condStatusFilter = "";
       state.condQuery = "";
